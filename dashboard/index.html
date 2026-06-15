@@ -173,15 +173,21 @@ tr:hover td{background:var(--bg-hover)}
   <canvas id="chart-timeline"></canvas>
 </div>
 
+<!-- By User table -->
+<div class="section">
+  <h2 class="section-title">By User</h2>
+  <div id="user-table-container"></div>
+</div>
+
 <!-- By Model table -->
 <div class="section">
   <h2 class="section-title">By Model</h2>
   <div id="model-table-container"></div>
 </div>
 
-<!-- Recent events -->
+<!-- Recent Activity -->
 <div class="section">
-  <h2 class="section-title">Recent Compression Events</h2>
+  <h2 class="section-title">Recent Activity</h2>
   <div class="scroll-box" id="events-container"></div>
 </div>
 
@@ -221,8 +227,9 @@ async function refresh() {
     updateBreakdownChart(stats);
     updateReasons(stats);
     updateTimeline(history);
+    updateUserTable(stats);
     updateModelTable(history);
-    updateEvents(history);
+    updateEvents(stats);
     setStatus('connected', true);
     document.getElementById('last-refresh').textContent = 'updated ' + new Date().toLocaleTimeString();
   } catch (e) {
@@ -435,13 +442,62 @@ function updateModelTable(history) {
     </table>`;
 }
 
-// --- Events ---
-function updateEvents(history) {
-  const container = document.getElementById('events-container');
-  const events = (history.history || []).slice().reverse();
+// --- User table ---
+function updateUserTable(stats) {
+  const container = document.getElementById('user-table-container');
+  const reqs = stats.recent_requests || [];
 
-  if (events.length === 0) {
-    container.innerHTML = '<div class="empty"><div class="empty-icon">&#x23F3;</div>No compression events yet — send some requests through headroom</div>';
+  const users = {};
+  reqs.forEach(r => {
+    const uid = (r.tags || {})['user-id'] || 'anonymous';
+    if (!users[uid]) users[uid] = { requests: 0, tokens_in: 0, tokens_saved: 0, last_seen: '' };
+    users[uid].requests++;
+    users[uid].tokens_in += r.input_tokens_original || 0;
+    users[uid].tokens_saved += r.tokens_saved || 0;
+    if (r.timestamp > users[uid].last_seen) users[uid].last_seen = r.timestamp;
+  });
+
+  const entries = Object.entries(users).sort((a, b) => b[1].requests - a[1].requests);
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">&#x1F465;</div>No user activity yet</div>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>User</th>
+        <th class="num">Requests</th>
+        <th class="num">Input Tokens</th>
+        <th class="num">Tokens Saved</th>
+        <th class="num">Savings %</th>
+        <th>Last Active</th>
+      </tr></thead>
+      <tbody>${entries.map(([uid, d]) => {
+        const pct = d.tokens_in > 0 ? (d.tokens_saved / d.tokens_in * 100).toFixed(1) : '0.0';
+        const lastSeen = d.last_seen ? new Date(d.last_seen).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '--';
+        const tagClass = uid === 'anonymous' ? 'tag-orange' : 'tag-green';
+        return `
+        <tr>
+          <td><span class="tag ${tagClass}">${uid}</span></td>
+          <td class="num">${d.requests}</td>
+          <td class="num">${fmtK(d.tokens_in)}</td>
+          <td class="num" style="color:var(--green)">${fmtK(d.tokens_saved)}</td>
+          <td class="num" style="color:${parseFloat(pct) > 0 ? 'var(--green)' : 'var(--text2)'}">${pct}%</td>
+          <td style="color:var(--text2)">${lastSeen}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>`;
+}
+
+// --- Events (recent activity feed) ---
+function updateEvents(stats) {
+  const container = document.getElementById('events-container');
+  const reqs = (stats.recent_requests || []).slice().reverse();
+
+  if (reqs.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">&#x23F3;</div>No activity yet — send requests through headroom</div>';
     return;
   }
 
@@ -449,22 +505,30 @@ function updateEvents(history) {
     <table>
       <thead><tr>
         <th>Time</th>
-        <th>Provider</th>
+        <th>User</th>
         <th>Model</th>
-        <th class="num">Tokens Saved</th>
-        <th class="num">Cost Saved</th>
+        <th class="num">Input</th>
+        <th class="num">Optimized</th>
+        <th class="num">Saved</th>
+        <th class="num">Latency</th>
       </tr></thead>
-      <tbody>${events.map(e => {
-        const t = new Date(e.timestamp);
+      <tbody>${reqs.map(r => {
+        const t = new Date(r.timestamp);
         const timeStr = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const dateStr = t.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const uid = (r.tags || {})['user-id'] || 'anon';
+        const tagClass = uid === 'anon' ? 'tag-orange' : 'tag-green';
+        const saved = r.tokens_saved || 0;
+        const savedColor = saved > 0 ? 'var(--green)' : 'var(--text2)';
+        const latency = r.total_latency_ms ? (r.total_latency_ms / 1000).toFixed(1) + 's' : '--';
         return `
         <tr>
-          <td style="color:var(--text2)">${dateStr} ${timeStr}</td>
-          <td><span class="tag tag-purple">${e.provider || '--'}</span></td>
-          <td><span class="tag tag-blue">${e.model || '--'}</span></td>
-          <td class="num" style="color:var(--green)">${fmt(e.total_tokens_saved || 0)}</td>
-          <td class="num" style="color:var(--orange)">$${(e.compression_savings_usd || 0).toFixed(4)}</td>
+          <td style="color:var(--text2)">${timeStr}</td>
+          <td><span class="tag ${tagClass}">${uid}</span></td>
+          <td style="font-size:12px;color:var(--text2)">${r.model || '--'}</td>
+          <td class="num">${fmtK(r.input_tokens_original || 0)}</td>
+          <td class="num">${fmtK(r.input_tokens_optimized || 0)}</td>
+          <td class="num" style="color:${savedColor}">${saved > 0 ? fmtK(saved) : '0'}</td>
+          <td class="num" style="color:var(--text2)">${latency}</td>
         </tr>`;
       }).join('')}
       </tbody>
