@@ -1,0 +1,24 @@
+services:
+  headroom:
+    build:
+      context: deploy/docker
+      dockerfile: Dockerfile
+    ports:
+      - "8787:8787"
+    environment:
+      # Mode A (standalone): routes directly to providers
+      # Mode B (with BBR): uncomment and set gateway URL
+      # ANTHROPIC_TARGET_API_URL: "https://maas-gateway.company.com/llm/ext-claude-sonnet"
+      HEADROOM_STATELESS: "false"
+    volumes:
+      # Persist compression stats across restarts
+      - headroom-data:/opt/headroom-data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8787/readyz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  headroom-data:

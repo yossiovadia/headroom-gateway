@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: headroom-gateway-config
+  labels:
+    app: headroom-gateway
+data:
+  # Compression behavior
+  HEADROOM_MODE: "token"
+
+  # Disable anonymous telemetry to headroomlabs.ai
+  HEADROOM_TELEMETRY: "off"
+
+  # Connection pool
+  HEADROOM_MAX_CONNECTIONS: "500"
+  HEADROOM_MAX_KEEPALIVE: "100"
+  HEADROOM_HTTP2: "true"
+
+  # Rate limiting (per API key / IP)
+  # HEADROOM_RATE_LIMIT_RPM: "60"
+  # HEADROOM_RATE_LIMIT_TPM: "100000"
+
+  # Mode B: route through BBR/MaaS gateway instead of directly to provider
+  # ANTHROPIC_TARGET_API_URL: "https://maas-gateway.company.com/llm/ext-claude-sonnet"
+  # OPENAI_TARGET_API_URL: "https://maas-gateway.company.com/llm/ext-openai"
