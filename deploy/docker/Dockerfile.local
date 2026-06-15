@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir "headroom-ai[proxy]==0.25.0" onnxruntime google-auth "google-cloud-aiplatform>=1.38"
+
+ENV HF_HOME=/opt/huggingface
+ENV HOME=/opt/app
+ENV HEADROOM_DATA_DIR=/opt/headroom-data
+RUN mkdir -p /opt/huggingface /opt/app /opt/headroom-data && \
+    chmod -R 777 /opt/huggingface /opt/app /opt/headroom-data
+
+EXPOSE 8787
+
+ENTRYPOINT ["headroom", "proxy", "--port", "8787", "--host", "0.0.0.0"]
