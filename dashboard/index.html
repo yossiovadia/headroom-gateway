@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Headroom Compression Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0b0e11;--bg-card:#181b1f;--bg-hover:#22262c;--border:#2c3138;
+  --text:#e0e3e8;--text2:#8b949e;--blue:#58a6ff;--green:#3fb950;
+  --orange:#d29922;--red:#f85149;--purple:#bc8cff;--cyan:#39d2c0;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:20px;max-width:1400px;margin:0 auto}
+
+/* Header */
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+header h1{font-size:22px;font-weight:600;color:var(--cyan)}
+header h1 span{color:var(--text2);font-weight:400;font-size:14px;margin-left:8px}
+.header-right{display:flex;align-items:center;gap:12px}
+#status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+#last-refresh{color:var(--text2);font-size:12px}
+
+/* Config bar */
+.config-bar{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.config-bar label{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;font-weight:600;flex-shrink:0}
+.config-bar input{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;font-size:13px;font-family:inherit;flex:1;min-width:300px}
+.config-bar input:focus{outline:none;border-color:var(--cyan)}
+.config-bar button{background:var(--bg-card);color:var(--text2);border:1px solid var(--border);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;transition:all .15s}
+.config-bar button:hover{background:var(--bg-hover);color:var(--text)}
+
+/* Tabs */
+.tabs{display:flex;gap:4px;margin-bottom:16px}
+.tabs a{background:var(--bg-card);color:var(--text2);border:1px solid var(--border);padding:8px 20px;border-radius:6px;font-size:14px;text-decoration:none;transition:all .15s}
+.tabs a:hover{background:var(--bg-hover);color:var(--text)}
+.tabs a.active{background:var(--cyan);color:#fff;border-color:var(--cyan)}
+
+/* KPI row */
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.kpi{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:20px;text-align:center;transition:border-color .2s}
+.kpi:hover{border-color:var(--cyan)}
+.kpi-label{display:block;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.kpi-value{display:block;font-size:32px;font-weight:700}
+.kpi-sub{display:block;font-size:11px;color:var(--text2);margin-top:4px}
+.kpi-value.cyan{color:var(--cyan)}
+.kpi-value.green{color:var(--green)}
+.kpi-value.orange{color:var(--orange)}
+.kpi-value.purple{color:var(--purple)}
+
+/* Charts row */
+.charts-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+.chart-box{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px}
+.chart-box h2{font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text)}
+.chart-box canvas{max-height:260px}
+
+/* Timeline */
+.timeline-box{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:24px}
+.timeline-box h2{font-size:14px;font-weight:600;margin-bottom:12px}
+.timeline-box canvas{max-height:220px}
+
+/* Tables */
+.section{margin-bottom:24px}
+h2.section-title{font-size:16px;font-weight:600;margin-bottom:12px;color:var(--text)}
+table{width:100%;border-collapse:collapse;background:var(--bg-card);border-radius:10px;overflow:hidden;border:1px solid var(--border)}
+th{background:#14171a;color:var(--text2);font-size:12px;text-transform:uppercase;letter-spacing:.5px;padding:10px 14px;text-align:left;white-space:nowrap}
+td{padding:10px 14px;font-size:13px;border-top:1px solid var(--border)}
+tr:hover td{background:var(--bg-hover)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.tag-green{background:rgba(63,185,80,.15);color:var(--green)}
+.tag-orange{background:rgba(210,153,34,.15);color:var(--orange)}
+.tag-red{background:rgba(248,81,73,.15);color:var(--red)}
+.tag-blue{background:rgba(88,166,255,.15);color:var(--blue)}
+.tag-purple{background:rgba(188,140,255,.15);color:var(--purple)}
+
+/* Reason bars */
+.reason-row{display:flex;align-items:center;gap:12px;padding:8px 0}
+.reason-label{font-size:13px;color:var(--text);width:200px;flex-shrink:0}
+.reason-bar-bg{flex:1;background:var(--border);border-radius:3px;height:8px}
+.reason-bar-fill{height:8px;border-radius:3px;transition:width .5s ease}
+.reason-count{font-size:13px;color:var(--text2);width:40px;text-align:right;font-variant-numeric:tabular-nums}
+
+/* Best compression highlight */
+.best-box{background:linear-gradient(135deg,rgba(57,210,192,.08),rgba(57,210,192,.02));border:1px solid rgba(57,210,192,.25);border-radius:10px;padding:16px 20px;margin-bottom:24px;display:flex;align-items:center;gap:16px}
+.best-icon{font-size:28px;flex-shrink:0}
+.best-text{font-size:14px;color:var(--text)}
+.best-text strong{color:var(--cyan)}
+
+/* Scroll container */
+.scroll-box{max-height:260px;overflow-y:auto;border-radius:10px}
+.scroll-box table{border-radius:0}
+.scroll-box thead{position:sticky;top:0;z-index:1}
+.scroll-box::-webkit-scrollbar{width:6px}
+.scroll-box::-webkit-scrollbar-track{background:var(--bg-card)}
+.scroll-box::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* Empty state */
+.empty{text-align:center;padding:40px 20px;color:var(--text2);font-size:14px}
+.empty-icon{font-size:36px;margin-bottom:12px;opacity:.5}
+
+/* Responsive */
+@media(max-width:900px){.kpi-row{grid-template-columns:repeat(2,1fr)}.charts-row{grid-template-columns:1fr}}
+@media(max-width:600px){.kpi-row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="tabs">
+  <a href="#" class="active">Compression</a>
+</div>
+
+<header>
+  <h1>Headroom Compression Dashboard <span id="last-refresh"></span></h1>
+  <div class="header-right">
+    <span id="status-dot"></span>
+    <span id="status-text" style="color:var(--text2);font-size:12px">connecting...</span>
+  </div>
+</header>
+
+<div class="config-bar">
+  <label>Headroom URL</label>
+  <input type="text" id="headroom-url" placeholder="https://headroom-gateway.apps.example.com">
+  <button onclick="applyUrl()">Connect</button>
+</div>
+
+<!-- KPIs -->
+<div class="kpi-row">
+  <div class="kpi">
+    <span class="kpi-label">Total Requests</span>
+    <span class="kpi-value cyan" id="kpi-requests">--</span>
+    <span class="kpi-sub" id="kpi-compressed-count">-- compressed</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Tokens Saved</span>
+    <span class="kpi-value green" id="kpi-tokens">--</span>
+    <span class="kpi-sub" id="kpi-tokens-sub">total input: --</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Cost Saved</span>
+    <span class="kpi-value orange" id="kpi-cost">--</span>
+    <span class="kpi-sub" id="kpi-cost-sub">total spend: --</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Compression Rate</span>
+    <span class="kpi-value purple" id="kpi-rate">--</span>
+    <span class="kpi-sub" id="kpi-best">best: --</span>
+  </div>
+</div>
+
+<!-- Best compression highlight -->
+<div class="best-box" id="best-box" style="display:none">
+  <div class="best-icon">&#x26A1;</div>
+  <div class="best-text" id="best-text"></div>
+</div>
+
+<!-- Charts row -->
+<div class="charts-row">
+  <div class="chart-box">
+    <h2>Request Breakdown</h2>
+    <canvas id="chart-breakdown"></canvas>
+  </div>
+  <div class="chart-box">
+    <h2>Uncompressed Reasons</h2>
+    <div id="reasons-container"></div>
+  </div>
+</div>
+
+<!-- Timeline -->
+<div class="timeline-box">
+  <h2>Tokens Saved Over Time</h2>
+  <canvas id="chart-timeline"></canvas>
+</div>
+
+<!-- By Model table -->
+<div class="section">
+  <h2 class="section-title">By Model</h2>
+  <div id="model-table-container"></div>
+</div>
+
+<!-- Recent events -->
+<div class="section">
+  <h2 class="section-title">Recent Compression Events</h2>
+  <div class="scroll-box" id="events-container"></div>
+</div>
+
+<script>
+let BASE_URL = window.location.origin;
+let breakdownChart = null;
+let timelineChart = null;
+let refreshTimer = null;
+
+// Init
+(function init() {
+  const urlInput = document.getElementById('headroom-url');
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('url')) {
+    BASE_URL = params.get('url');
+  }
+  urlInput.value = BASE_URL;
+  refresh();
+  refreshTimer = setInterval(refresh, 10000);
+})();
+
+function applyUrl() {
+  BASE_URL = document.getElementById('headroom-url').value.replace(/\/+$/, '');
+  const url = new URL(window.location);
+  url.searchParams.set('url', BASE_URL);
+  window.history.replaceState({}, '', url);
+  refresh();
+}
+
+async function refresh() {
+  try {
+    const [stats, history] = await Promise.all([
+      fetch(BASE_URL + '/stats').then(r => r.json()),
+      fetch(BASE_URL + '/stats-history').then(r => r.json()),
+    ]);
+    updateKPIs(stats, history);
+    updateBreakdownChart(stats);
+    updateReasons(stats);
+    updateTimeline(history);
+    updateModelTable(history);
+    updateEvents(history);
+    setStatus('connected', true);
+    document.getElementById('last-refresh').textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    setStatus('disconnected', false);
+    console.error('Refresh failed:', e);
+  }
+}
+
+function setStatus(text, ok) {
+  const dot = document.getElementById('status-dot');
+  const label = document.getElementById('status-text');
+  dot.style.background = ok ? 'var(--green)' : 'var(--red)';
+  label.textContent = text;
+  label.style.color = ok ? 'var(--text2)' : 'var(--red)';
+}
+
+// --- KPIs ---
+function updateKPIs(stats, history) {
+  const s = stats.summary || {};
+  const c = s.compression || {};
+  const cost = s.cost || {};
+  const lt = history.lifetime || {};
+
+  document.getElementById('kpi-requests').textContent = fmt(s.api_requests || 0);
+  document.getElementById('kpi-compressed-count').textContent = (c.requests_compressed || 0) + ' compressed';
+
+  document.getElementById('kpi-tokens').textContent = fmtK(lt.tokens_saved || c.total_tokens_removed || 0);
+  document.getElementById('kpi-tokens-sub').textContent = 'total input: ' + fmtK(lt.total_input_tokens || 0);
+
+  const savedUsd = lt.compression_savings_usd || cost.total_saved_usd || 0;
+  const totalUsd = lt.total_input_cost_usd || cost.without_headroom_usd || 0;
+  document.getElementById('kpi-cost').textContent = '$' + savedUsd.toFixed(4);
+  document.getElementById('kpi-cost-sub').textContent = 'total spend: $' + totalUsd.toFixed(2);
+
+  document.getElementById('kpi-rate').textContent = (c.avg_compression_pct || 0).toFixed(1) + '%';
+  document.getElementById('kpi-best').textContent = 'best: ' + (c.best_compression_pct || 0).toFixed(1) + '%';
+
+  // Best box
+  const bestBox = document.getElementById('best-box');
+  if (c.best_detail) {
+    bestBox.style.display = 'flex';
+    document.getElementById('best-text').innerHTML = 'Best compression: <strong>' + c.best_detail + '</strong> (' + (c.best_compression_pct || 0).toFixed(1) + '% savings)';
+  } else {
+    bestBox.style.display = 'none';
+  }
+}
+
+// --- Breakdown chart ---
+function updateBreakdownChart(stats) {
+  const s = stats.summary || {};
+  const c = s.compression || {};
+  const total = s.api_requests || 0;
+  const compressed = c.requests_compressed || 0;
+  const uncompressed = total - compressed;
+
+  const ctx = document.getElementById('chart-breakdown').getContext('2d');
+  if (breakdownChart) breakdownChart.destroy();
+
+  if (total === 0) {
+    breakdownChart = null;
+    return;
+  }
+
+  breakdownChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Compressed', 'Uncompressed'],
+      datasets: [{
+        data: [compressed, uncompressed],
+        backgroundColor: ['#39d2c0', '#2c3138'],
+        borderColor: ['#39d2c0', '#3a3f47'],
+        borderWidth: 1,
+        hoverOffset: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      cutout: '65%',
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { color: '#8b949e', font: { size: 12 }, padding: 16, usePointStyle: true, pointStyleWidth: 10 }
+        }
+      }
+    }
+  });
+}
+
+// --- Reasons ---
+function updateReasons(stats) {
+  const reasons = (stats.summary || {}).uncompressed_requests || {};
+  const container = document.getElementById('reasons-container');
+
+  const entries = Object.entries(reasons);
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">&#x2728;</div>No uncompressed requests yet</div>';
+    return;
+  }
+
+  const maxVal = Math.max(...entries.map(([,v]) => v), 1);
+  const labels = {
+    prefix_frozen: { label: 'Prefix Frozen', color: 'var(--blue)', desc: 'Context prefix identified, no stale content yet' },
+    too_small: { label: 'Too Small', color: 'var(--orange)', desc: 'Content below compression threshold' },
+    no_compressible_content: { label: 'No Compressible Content', color: 'var(--purple)', desc: 'No old tool outputs to compress' },
+    first_request: { label: 'First Request', color: 'var(--text2)', desc: 'Initial request in session' },
+  };
+
+  container.innerHTML = entries.map(([key, val]) => {
+    const info = labels[key] || { label: key.replace(/_/g, ' '), color: 'var(--text2)', desc: '' };
+    const pct = (val / maxVal * 100).toFixed(0);
+    return `
+      <div class="reason-row" title="${info.desc}">
+        <span class="reason-label">${info.label}</span>
+        <div class="reason-bar-bg"><div class="reason-bar-fill" style="width:${pct}%;background:${info.color}"></div></div>
+        <span class="reason-count">${val}</span>
+      </div>`;
+  }).join('');
+}
+
+// --- Timeline ---
+function updateTimeline(history) {
+  const series = (history.series || {}).hourly || [];
+  const ctx = document.getElementById('chart-timeline').getContext('2d');
+
+  if (timelineChart) timelineChart.destroy();
+
+  if (series.length === 0) {
+    timelineChart = null;
+    return;
+  }
+
+  const labels = series.map(p => {
+    const d = new Date(p.timestamp);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  });
+
+  timelineChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Tokens Saved',
+        data: series.map(p => p.tokens_saved || 0),
+        backgroundColor: 'rgba(57, 210, 192, 0.6)',
+        borderColor: '#39d2c0',
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      scales: {
+        x: { grid: { color: '#2c3138' }, ticks: { color: '#8b949e', font: { size: 11 } } },
+        y: { grid: { color: '#2c3138' }, ticks: { color: '#8b949e', font: { size: 11 }, callback: v => fmtK(v) }, beginAtZero: true }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#181b1f',
+          borderColor: '#2c3138',
+          borderWidth: 1,
+          titleColor: '#e0e3e8',
+          bodyColor: '#8b949e',
+          callbacks: { label: ctx => fmt(ctx.raw) + ' tokens saved' }
+        }
+      }
+    }
+  });
+}
+
+// --- Model table ---
+function updateModelTable(history) {
+  const container = document.getElementById('model-table-container');
+  const events = history.history || [];
+
+  // Aggregate by model
+  const models = {};
+  events.forEach(e => {
+    const m = e.model || 'unknown';
+    if (!models[m]) models[m] = { requests: 0, tokens: 0, cost: 0 };
+    models[m].requests++;
+    models[m].tokens += e.total_tokens_saved || 0;
+    models[m].cost += e.compression_savings_usd || 0;
+  });
+
+  const entries = Object.entries(models);
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">&#x1F4CA;</div>No model data yet</div>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Model</th>
+        <th class="num">Compression Events</th>
+        <th class="num">Tokens Saved</th>
+        <th class="num">Cost Saved</th>
+      </tr></thead>
+      <tbody>${entries.map(([name, d]) => `
+        <tr>
+          <td><span class="tag tag-blue">${name}</span></td>
+          <td class="num">${d.requests}</td>
+          <td class="num">${fmtK(d.tokens)}</td>
+          <td class="num">$${d.cost.toFixed(4)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+// --- Events ---
+function updateEvents(history) {
+  const container = document.getElementById('events-container');
+  const events = (history.history || []).slice().reverse();
+
+  if (events.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">&#x23F3;</div>No compression events yet — send some requests through headroom</div>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Time</th>
+        <th>Provider</th>
+        <th>Model</th>
+        <th class="num">Tokens Saved</th>
+        <th class="num">Cost Saved</th>
+      </tr></thead>
+      <tbody>${events.map(e => {
+        const t = new Date(e.timestamp);
+        const timeStr = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const dateStr = t.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        return `
+        <tr>
+          <td style="color:var(--text2)">${dateStr} ${timeStr}</td>
+          <td><span class="tag tag-purple">${e.provider || '--'}</span></td>
+          <td><span class="tag tag-blue">${e.model || '--'}</span></td>
+          <td class="num" style="color:var(--green)">${fmt(e.total_tokens_saved || 0)}</td>
+          <td class="num" style="color:var(--orange)">$${(e.compression_savings_usd || 0).toFixed(4)}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>`;
+}
+
+// --- Formatting helpers ---
+function fmt(n) {
+  if (n == null) return '--';
+  return Number(n).toLocaleString();
+}
+function fmtK(n) {
+  if (n == null) return '--';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+</script>
+</body>
+</html>
