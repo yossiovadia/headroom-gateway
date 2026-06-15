@@ -5,19 +5,14 @@ services:
       dockerfile: Dockerfile.local
     ports:
       - "8787:8787"
-    entrypoint: ["headroom", "proxy", "--port", "8787", "--host", "0.0.0.0", "--backend", "litellm-vertex_ai", "--bedrock-region", "us-east5"]
     environment:
-      GOOGLE_APPLICATION_CREDENTIALS: /opt/gcloud/application_default_credentials.json
-      VERTEX_PROJECT: "itpc-gcp-ai-eng-claude"
-      VERTEX_LOCATION: "us-east5"
-      VERTEXAI_PROJECT: "itpc-gcp-ai-eng-claude"
-      VERTEXAI_LOCATION: "us-east5"
-      GOOGLE_CLOUD_PROJECT: "itpc-gcp-ai-eng-claude"
-      GCLOUD_PROJECT: "itpc-gcp-ai-eng-claude"
       HEADROOM_TELEMETRY: "off"
+      HEADROOM_STATELESS: "false"
+      # Lower thresholds so compression triggers sooner
+      HEADROOM_COMPRESSION_STABLE_AFTER_TURN: "2"
+      HEADROOM_STALE_READ_COMPRESS_AFTER_TURNS: "2"
     volumes:
       - ${HF_HOME:-~/.cache/huggingface}:/opt/huggingface:ro
-      - ~/.config/gcloud/application_default_credentials.json:/opt/gcloud/application_default_credentials.json:ro
       - headroom-data:/opt/headroom-data
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8787/readyz')"]
