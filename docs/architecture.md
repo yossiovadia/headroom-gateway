@@ -195,41 +195,120 @@ ANTHROPIC_API_KEY=<user's-own-key or shared-org-key>
 
 ---
 
+### Option D: BBR Plugin + Headroom Sidecar (Like Guardrails)
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │           MaaS/BBR Pod                  │
+                    │                                         │
+Users ──────────────│  ┌──────────────┐   ┌──────────────┐   │──▶ Provider
+(Claude Code,       │  │  BBR ext-proc │   │  Headroom    │   │   (Anthropic,
+ Codex, etc.)       │  │              │──▶│  Sidecar     │   │    OpenAI)
+                    │  │ • Auth       │   │              │   │
+                    │  │ • Metering   │   │ • Compress   │   │
+                    │  │ • Headroom   │   │   /v1/       │   │
+                    │  │   plugin     │   │   compress-  │   │
+                    │  │ • API trans  │   │   raw        │   │
+                    │  │ • Key inject │   │ • Kompress   │   │
+                    │  └──────────────┘   │   ML model   │   │
+                    │                     └──────────────┘   │
+                    └─────────────────────────────────────────┘
+```
+
+**User config:** Same as MaaS today — no change.
+```bash
+ANTHROPIC_BASE_URL=https://maas.company.com/llm/ext-claude-sonnet
+ANTHROPIC_API_KEY=<MaaS-key>
+```
+
+**How it works:**
+1. User sends request to MaaS (exactly as today)
+2. BBR metering plugin checks entitlement, identifies user
+3. BBR headroom plugin walks the messages array:
+   - Counts turns backwards from the end
+   - Finds `role: "tool"` messages older than N turns (default 2)
+   - Extracts content > 500 chars
+   - Sends text blocks to sidecar `POST localhost:8788/v1/compress-raw`
+   - Replaces tool content with compressed versions
+4. BBR api-translation, apikey-injection run as normal
+5. Compressed request goes to provider
+
+**Same pattern as NeMo guardrails:**
+The NeMo guardrails plugin calls a NeMo sidecar over HTTP to check
+content. The headroom plugin calls a headroom sidecar to compress content.
+Same architecture — different purpose.
+
+**Pros:**
+- **Zero routing complexity** — sidecar is localhost, same pod, no Envoy routing issues
+- **Zero user changes** — same MaaS URL, same key, no new endpoints
+- **MaaS handles everything** — auth, metering, per-user tracking, rate limiting
+- **No new services** — headroom is a container in the existing pod, not a separate Deployment
+- **Proven** — we built and tested this, 53% savings e2e through the full pipeline
+- **Per-user tracking** — metering plugin already has user identity (x-maas-username)
+- Selection logic is explicit in Go — configurable (protectRecentTurns, minCompressChars)
+
+**Cons:**
+- **Buffering** — ext-proc buffers the full request body (but it already does this for
+  api-translation — no NEW buffering added)
+- **Latency** — sidecar call adds ~200-500ms on CPU, <100ms on GPU. LLM call takes 2-30s.
+  Noy's assessment: "acceptable"
+- **Not session-aware** — plugin uses turn-counting heuristic (protect last N turns) instead
+  of headroom's proxy-mode session tracking. But Noy's analysis showed this is sufficient:
+  tool results are 80% of tokens, and the "last 2 turns protected" heuristic covers it
+- **Custom code** — Go plugin (~80 lines) + Python sidecar (~30 lines). Already built and tested.
+- **Sidecar resource overhead** — needs 4Gi memory + 4 CPU (or GPU) per BBR pod
+
+**What we already built (on feat/headroom-on-metering branch):**
+- `pkg/plugins/headroom/plugin.go` — Go plugin with selection logic
+- `pkg/plugins/headroom/client.go` — HTTP client for /v1/compress-raw
+- `pkg/plugins/headroom/plugin_test.go` — 20 tests, all pass
+- `deploy/examples/headroom/compress-raw-server.py` — Python sidecar
+- `deploy/examples/headroom/Dockerfile` — Sidecar image with pre-downloaded Kompress model
+
+---
+
 ## Comparison Matrix
 
-| Aspect | A: Before MaaS | B: After MaaS | C: Standalone |
-|--------|----------------|---------------|---------------|
-| **Compression** | YES | YES (if routing fixed) | YES |
-| **Auth/key mgmt** | MaaS handles | MaaS handles | Manual / shared key |
-| **Per-user tracking** | Needs header | Native (x-maas-username) | Needs header |
-| **Metering shows savings** | YES (compressed tokens) | NO (original tokens) | N/A (own dashboard) |
-| **Routing complexity** | Low | HIGH (ext-proc blocker) | None |
-| **Multi-provider** | YES | Depends on MaaS routes | YES |
-| **MaaS dependency** | Optional | Required | None |
-| **Time to pilot** | Days | Weeks (routing fix needed) | Now |
-| **Failover** | Bypass headroom → MaaS direct | Bypass headroom → provider direct | No headroom = no service |
+| Aspect | A: Before MaaS | B: After MaaS | C: Standalone | D: BBR Plugin |
+|--------|----------------|---------------|---------------|---------------|
+| **Compression** | YES | YES (if routing fixed) | YES | YES (proven 53%) |
+| **Auth/key mgmt** | MaaS handles | MaaS handles | Manual / shared key | MaaS handles |
+| **Per-user tracking** | Needs header | Native (x-maas-username) | Needs header | Native (metering plugin) |
+| **Metering shows savings** | YES (compressed) | NO (original) | N/A (own dashboard) | YES (compressed) |
+| **Routing complexity** | Low | HIGH (blocker) | None | **None (localhost)** |
+| **Multi-provider** | YES | Depends on MaaS routes | YES | What MaaS supports |
+| **MaaS dependency** | Optional | Required | None | Required |
+| **User changes** | New URL | New path | New URL + key | **None** |
+| **Time to pilot** | Days | Weeks | Now | **Days (code exists)** |
+| **Failover** | Bypass → MaaS | Bypass → provider | No service | failOpen=true (pass through) |
 
 ## Recommendation
 
-**Start with Option C (Standalone)** for the pilot. It works today, no blockers.
-Add MaaS integration later via **Option A (Before MaaS)** when needed.
+Two viable paths depending on priorities:
 
-Rationale:
-- Option B (After MaaS) has a hard routing blocker that needs Noy + Envoy expertise
-- Option A (Before MaaS) is simpler than B and gives better metering (compressed tokens)
-- Option C proves the value immediately while A/B are being sorted out
+### Path 1: Fastest pilot — Option C (Standalone)
+Deploy headroom standalone, give users a URL + API key. No MaaS dependency.
+Proves compression value in days. Add MaaS later via Option A.
 
-### Pilot plan:
-1. Deploy headroom standalone on OpenShift (done — `headroom-gateway` service)
-2. Give 3-5 users the URL + shared Anthropic API key
-3. Monitor compression via headroom dashboard (done — deployed)
-4. After pilot proves value, add MaaS in front (Option A) for auth + metering
+### Path 2: Full integration — Option D (BBR Plugin + Sidecar)
+Add headroom as a sidecar to the existing MaaS pod, like guardrails. Zero user
+changes — compression is invisible. Code exists, proven at 53% savings.
 
-### Production plan:
-1. Option A: headroom before MaaS
-2. MaaS handles auth, metering, rate limiting
-3. Headroom handles compression, per-user tracking (via header from MaaS or client)
-4. Both dashboards: metering (cost) + headroom (savings)
+**Option D is the strongest long-term choice:**
+- Users change nothing — same MaaS URL, same key
+- MaaS handles auth, metering, per-user tracking — no new services
+- No Envoy routing issues (localhost sidecar, not a separate service)
+- `failOpen=true` — if sidecar is down, requests pass through uncompressed
+- Code already built and tested
+
+**Option B (After MaaS) is not recommended** — the Envoy ext-proc routing
+blocker makes it impractical without significant infrastructure changes.
+
+### Suggested plan:
+1. **Week 1**: Deploy Option D (plugin + sidecar) on sandbox — code exists
+2. **Week 1**: Verify metering dashboard shows compressed token counts
+3. **Week 2**: Pilot with 3-5 users — monitor compression via headroom dashboard
+4. **Week 3**: Evaluate results, decide on GPU for production latency
 
 ## Resource Requirements
 
