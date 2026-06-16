@@ -258,6 +258,35 @@ Same architecture — different purpose.
 - **Custom code** — Go plugin (~80 lines) + Python sidecar (~30 lines). Already built and tested.
 - **Sidecar resource overhead** — needs 4Gi memory + 4 CPU (or GPU) per BBR pod
 
+**Smart content selection in the Go plugin:**
+
+The plugin doesn't blindly send everything to the sidecar. It detects what's
+worth compressing and skips the rest — reducing sidecar calls and latency.
+
+| Content Type | Compresses? | Detection | Action |
+|---|---|---|---|
+| JSON arrays (API/search results) | **61-70%** | Starts with `[` or `{` with nested arrays | SEND to sidecar |
+| Log output (structured, repetitive) | **65%** | Timestamp patterns, repeated line structure | SEND to sidecar |
+| Code files (read via tool) | **53%** | Indentation, language keywords, function defs | SEND to sidecar |
+| Plain text (short answers) | 0% | Short, no structure, < 500 chars | SKIP |
+| Error messages / stack traces | 0% | `panic:`, `Error:`, `Traceback`, stack frames | SKIP |
+| Small tool outputs | 0% | Below `minCompressChars` threshold | SKIP |
+| Recent tool outputs | N/A | Within last `protectRecentTurns` turns | SKIP (protected) |
+
+Selection logic flow:
+```
+For each message in conversation:
+  1. Is role == "tool"?               → NO: skip (user/assistant/system protected)
+  2. Is it within last N turns?       → YES: skip (recent, model may reference)
+  3. Is content < 500 chars?          → YES: skip (too small, overhead not worth it)
+  4. Does it look like an error?      → YES: skip (headroom protects errors anyway)
+  5. Otherwise                        → SEND to sidecar for compression
+```
+
+This means the sidecar only processes content that's likely to yield 50%+ savings.
+A typical 10-turn coding session might have 8 tool outputs, of which 3-4 are old
+enough and large enough to compress — the sidecar handles only those, not all 8.
+
 **What we already built (on feat/headroom-on-metering branch):**
 - `pkg/plugins/headroom/plugin.go` — Go plugin with selection logic
 - `pkg/plugins/headroom/client.go` — HTTP client for /v1/compress-raw
