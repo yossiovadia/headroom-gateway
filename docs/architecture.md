@@ -248,15 +248,19 @@ Same architecture — different purpose.
 - Selection logic is explicit in Go — configurable (protectRecentTurns, minCompressChars)
 
 **Cons:**
-- **Buffering** — ext-proc buffers the full request body (but it already does this for
-  api-translation — no NEW buffering added)
-- **Latency** — sidecar call adds ~200-500ms on CPU, <100ms on GPU. LLM call takes 2-30s.
-  Noy's assessment: "acceptable"
-- **Not session-aware** — plugin uses turn-counting heuristic (protect last N turns) instead
-  of headroom's proxy-mode session tracking. But Noy's analysis showed this is sufficient:
-  tool results are 80% of tokens, and the "last 2 turns protected" heuristic covers it
-- **Custom code** — Go plugin (~80 lines) + Python sidecar (~30 lines). Already built and tested.
-- **Sidecar resource overhead** — needs 4Gi memory + 4 CPU (or GPU) per BBR pod
+- **Not using headroom as designed** — headroom is a proxy. This approach uses it as a
+  compression API, requiring a custom `/v1/compress-raw` endpoint because the native
+  `/v1/compress` API doesn't work for stateless calls
+- **Custom code to maintain** — Go plugin (~80 lines) + Python sidecar (~30 lines)
+  that replicate headroom's session-aware intelligence with a simpler turn-counting heuristic
+- **Heavy sidecar per pod** — 4Gi memory + 4 CPU (or GPU) for Kompress ML inference.
+  Scales with BBR replicas (3 replicas = 3 ML models loaded)
+- **Coupling** — headroom updates require BBR pod restarts. Compression and auth/metering
+  share the same scaling and lifecycle
+- **Buffering** — ext-proc buffers the full request body. Sidecar call adds ~200-500ms
+  (CPU) or <100ms (GPU) while the body is held in Envoy memory
+- **Latency** — sidecar call adds to the request processing time before the LLM call
+  even starts. On CPU this is ~3s for large tool outputs
 
 **Smart content selection in the Go plugin:**
 
@@ -313,31 +317,31 @@ enough and large enough to compress — the sidecar handles only those, not all 
 
 ## Recommendation
 
-Two viable paths depending on priorities:
+**Option A (Headroom Before MaaS)** is the recommended architecture.
 
-### Path 1: Fastest pilot — Option C (Standalone)
-Deploy headroom standalone, give users a URL + API key. No MaaS dependency.
-Proves compression value in days. Add MaaS later via Option A.
+Rationale:
+- Uses headroom exactly as designed — transparent proxy with session-aware compression
+- No custom code — deploy upstream headroom image, no Go plugins or custom Python endpoints
+- Separation of concerns — compression and auth/metering are independent services with
+  independent scaling, lifecycle, and updates
+- No resource overhead on BBR pods (headroom runs in its own pods)
+- Multi-provider native — headroom routes by API format without any MaaS configuration
+- MaaS sees compressed tokens — metering reflects actual cost
 
-### Path 2: Full integration — Option D (BBR Plugin + Sidecar)
-Add headroom as a sidecar to the existing MaaS pod, like guardrails. Zero user
-changes — compression is invisible. Code exists, proven at 53% savings.
+**Option D (BBR Plugin)** is a viable fallback if Option A routing proves difficult on
+a specific cluster. It works but introduces custom code, couples compression to the
+BBR lifecycle, and adds significant sidecar resource overhead (4Gi + 4 CPU per pod).
 
-**Option D is the strongest long-term choice:**
-- Users change nothing — same MaaS URL, same key
-- MaaS handles auth, metering, per-user tracking — no new services
-- No Envoy routing issues (localhost sidecar, not a separate service)
-- `failOpen=true` — if sidecar is down, requests pass through uncompressed
-- Code already built and tested
-
-**Option B (After MaaS) is not recommended** — the Envoy ext-proc routing
-blocker makes it impractical without significant infrastructure changes.
+**Option B (After MaaS)** is not recommended — MaaS modifies the request before headroom
+sees it (format translation, key injection), which interferes with headroom's session
+tracking and compression logic.
 
 ### Suggested plan:
-1. **Week 1**: Deploy Option D (plugin + sidecar) on sandbox — code exists
-2. **Week 1**: Verify metering dashboard shows compressed token counts
-3. **Week 2**: Pilot with 3-5 users — monitor compression via headroom dashboard
-4. **Week 3**: Evaluate results, decide on GPU for production latency
+1. **Week 1**: Deploy Option A on sandbox659 — headroom as a Service, MaaS forwards to it
+2. **Week 1**: Verify: user → headroom (compress) → MaaS (auth, meter) → provider
+3. **Week 2**: Pilot with 3-5 users (Claude Code + Codex) — monitor both dashboards
+4. **Week 3**: Evaluate compression savings, latency impact, decide on GPU for production
+5. **Fallback**: If Option A routing doesn't work, deploy Option D (code exists, proven)
 
 ## Resource Requirements
 
