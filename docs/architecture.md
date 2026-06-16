@@ -350,6 +350,34 @@ tracking and compression logic.
 4. **Week 3**: Evaluate compression savings, latency impact, decide on GPU for production
 5. **Fallback**: If Option A routing doesn't work, deploy Option D (code exists, proven)
 
+## Compression Stack: Kompress ML + Smart_Crusher
+
+Headroom uses two compression methods:
+- **smart_crusher** — rule-based, compresses JSON arrays by removing duplicate structure. Instant, no ML.
+- **Kompress** — ML model (ModernBERT tokenizer + Kompress ONNX, ~274MB) that scores token
+  importance and removes low-value tokens. Handles text, logs, code. ~3s on CPU, <100ms on GPU.
+
+Both methods are always used together via the `ContentRouter`, which detects content type
+and routes to the appropriate compressor.
+
+| | Smart_crusher (JSON) | Kompress ML (text/logs/code) | ModernBERT tokenizer |
+|---|---|---|---|
+| **Options A, B, C** (proxy mode) | Automatic | Automatic — loaded on startup | Automatic |
+| **Option D** (sidecar) | Requires custom endpoint | Requires manual pre-load | Requires pre-download in Dockerfile |
+
+**Options A/B/C** — headroom's proxy loads the full compression stack on startup. Deploy the
+Docker image and everything works. No custom code.
+
+**Option D** — the native `/v1/compress` API doesn't work for stateless calls (protects
+everything as "recent"). We built a custom `/v1/compress-raw` endpoint that calls
+`ContentRouter.compress()` directly and manually pre-loads `KompressCompressor` into
+the router. Without this wiring, only smart_crusher runs and Kompress is silently skipped.
+This is custom code that reimplements what headroom's proxy does natively.
+
+This is a meaningful architectural difference: Options A/B/C use headroom as designed
+and get the full compression stack for free. Option D requires custom code to achieve
+the same result.
+
 ## Resource Requirements
 
 | Resource | CPU-only | With GPU |
