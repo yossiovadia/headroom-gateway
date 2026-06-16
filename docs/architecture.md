@@ -93,10 +93,17 @@ ANTHROPIC_API_KEY=<MaaS-key>    # passes through headroom to MaaS
 - Extra network hop (user → headroom → MaaS → provider)
 - If headroom is down, users can't reach MaaS (unless failover configured)
 
-**Open question:** How does headroom forward to MaaS? The API format must match
-what MaaS expects. If user sends `/v1/messages` (Anthropic), headroom compresses
-and forwards `/v1/messages` to MaaS. MaaS needs to accept that format (requires
-PR #301 passthrough support in the deployed image).
+**Format compatibility — solved by PR #301 (merged):**
+PR #301 adds passthrough mode to MaaS — when the client's API format matches the
+provider's format, MaaS skips translation entirely. This means:
+- Claude Code sends `/v1/messages` → headroom compresses → MaaS passes through → Anthropic
+- Codex sends `/v1/responses` → headroom compresses → MaaS passes through → OpenAI
+- Any OpenAI-compatible tool sends `/v1/chat/completions` → same flow
+
+On sandbox659, body-based model resolution means a single URL per provider handles
+all models. Headroom sets `ANTHROPIC_TARGET_API_URL=https://maas.../llm/ext-opus`
+and all Anthropic models (Opus, Sonnet, Haiku) work through one route. Users switch
+models in the request body — no URL changes needed.
 
 ---
 
