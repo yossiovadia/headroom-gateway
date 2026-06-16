@@ -307,48 +307,125 @@ enough and large enough to compress — the sidecar handles only those, not all 
 
 ---
 
+---
+
+### Option E: Shared Headroom Compression Service (Noy's Proposal)
+
+```
+                    ┌─────────────────────────┐     ┌──────────────┐
+                    │    MaaS/BBR Pod          │     │  Headroom    │
+                    │                         │     │  Service     │
+Users ──────────────│  ┌──────────────┐       │     │  (shared)    │──▶ Provider
+(Claude Code,       │  │  BBR ext-proc │──────────▶│              │   (Anthropic,
+ Codex, etc.)       │  │              │◀──────────│ • compress() │    OpenAI)
+                    │  │ • Auth       │       │     │ • CacheAlign│
+                    │  │ • Headroom   │       │     │ • Session   │
+                    │  │   plugin     │       │     │ • Kompress  │
+                    │  │ • Metering   │       │     │ • GPU pool  │
+                    │  │ • API trans  │       │     └──────────────┘
+                    │  │ • Key inject │       │
+                    │  └──────────────┘       │
+                    └─────────────────────────┘
+```
+
+**User config:** Same as MaaS today — no change.
+```bash
+ANTHROPIC_BASE_URL=https://maas.company.com/llm/ext-opus
+ANTHROPIC_API_KEY=<MaaS-key>
+```
+
+**How it works:**
+1. User sends request to MaaS (exactly as today)
+2. BBR headroom plugin sends the FULL messages array to headroom service
+3. Headroom service runs `compress(messages, model)` — the library API, not the proxy
+4. Returns compressed messages with stats
+5. Plugin replaces messages in request body, writes savings to CycleState
+6. BBR continues: api-translation, apikey-injection, metering
+
+**Key difference from Option D:** Uses headroom's **library API** (`from headroom import compress`),
+not the custom `/v1/compress-raw` endpoint. The library has the full pipeline:
+
+| Feature | Option D (/v1/compress-raw) | Option E (library compress()) |
+|---------|---------------------------|-------------------------------|
+| ContentRouter (smart strategy) | Yes | Yes |
+| SmartCrusher / Kompress / CodeCompressor | Yes (manual preload) | Yes (automatic) |
+| **CacheAligner** (prefix stabilization for KV cache hits) | **No** | **Yes** |
+| **Session tracking** (turn distance from history) | **No** (Go turn-counting) | **Yes** |
+| **CCR cache** (skip re-compression of seen content) | **No** | **Yes** |
+
+**CacheAligner is potentially more valuable than compression itself.**
+Anthropic charges $1.88/MTok for cache reads vs $18.75/MTok for new input — 10x difference.
+CacheAligner stabilizes prompt prefixes so the provider's KV cache hits consistently.
+Without it, compressed text varies slightly each time → cache miss every request.
+
+**Pros:**
+- **Full headroom pipeline** — CacheAligner, session tracking, CCR cache, Kompress, all automatic
+- **Shared GPU pool** — one headroom Deployment with GPU, shared across all users. Not per-pod
+- **Zero user changes** — same MaaS URL, same key
+- **Simpler Go plugin** — send full messages array, get compressed messages back. No selection
+  logic, no turn-counting, no content detection in Go. Headroom handles it internally.
+- **MaaS handles auth/metering** — same as Option D
+- **Scales efficiently** — 3-5 headroom replicas with GPU serve 1000+ users vs 10× sidecar pods
+
+**Cons:**
+- **Network hop** — plugin calls headroom service over cluster network (not localhost like Option D).
+  ~1-5ms latency, negligible vs compression time.
+- **Service dependency** — headroom service must be up. `failOpen=true` mitigates this.
+- **Requires plugin code change** — current plugin sends text blocks to `/v1/compress-raw`.
+  Needs update to send full message array to `/v1/compress`. Simpler code though.
+
+**Implementation:**
+- Headroom service: ~20 lines of Python wrapping `from headroom import compress`
+- Go plugin update: simplify to send `messages` + `model`, receive compressed `messages`
+- Deploy as a Kubernetes Service in `openshift-ingress` namespace
+
+---
+
 ## Comparison Matrix
 
-| Aspect | A: Before MaaS | B: After MaaS | C: Standalone | D: BBR Plugin |
-|--------|----------------|---------------|---------------|---------------|
-| **Compression** | YES | YES (if routing fixed) | YES | YES (proven 53%) |
-| **Auth/key mgmt** | MaaS handles | MaaS handles | Manual / shared key | MaaS handles |
-| **Per-user tracking** | Needs header | Native (x-maas-username) | Needs header | Native (metering plugin) |
-| **Metering shows savings** | YES (compressed) | NO (original) | N/A (own dashboard) | YES (compressed) |
-| **Routing complexity** | Low | HIGH (blocker) | None | **None (localhost)** |
-| **Multi-provider** | YES | Depends on MaaS routes | YES | What MaaS supports |
-| **MaaS dependency** | Optional | Required | None | Required |
-| **User changes** | New URL | New path | New URL + key | **None** |
-| **Time to pilot** | Days | Weeks | Now | **Days (code exists)** |
-| **Failover** | Bypass → MaaS | Bypass → provider | No service | failOpen=true (pass through) |
+| Aspect | A: Before MaaS | B: After MaaS | C: Standalone | D: BBR Sidecar | E: Shared Service |
+|--------|----------------|---------------|---------------|----------------|-------------------|
+| **Compression** | YES | YES | YES | YES (53%) | YES (full pipeline) |
+| **CacheAligner** | YES | YES | YES | **NO** | **YES** |
+| **Session tracking** | YES (proxy) | YES | YES | NO (turn heuristic) | **YES** |
+| **Auth/key mgmt** | MaaS | MaaS | Manual | MaaS | **MaaS** |
+| **Per-user tracking** | Needs header | Native | Needs header | Native | **Native** |
+| **Metering** | Compressed tokens | Original tokens | Own dashboard | Compressed | **Compressed** |
+| **Routing complexity** | Low | HIGH | None | None (localhost) | **None (service)** |
+| **User changes** | New URL | New path | New URL + key | **None** | **None** |
+| **Custom code** | None | None | None | Go + Python | **Go + Python (simpler)** |
+| **Resource per pod** | None | None | None | 4Gi + 4CPU each | **Shared pool** |
+| **GPU sharing** | Own pool | N/A | Own pool | Per-pod (expensive) | **Shared pool** |
+| **Scale to 50 users** | Good | Good | Good | OK | **Best** |
 
 ## Recommendation
 
-**Option A (Headroom Before MaaS)** is the recommended architecture.
+**Option E (Shared Headroom Compression Service)** is the recommended architecture.
 
 Rationale:
-- Uses headroom exactly as designed — transparent proxy with session-aware compression
-- No custom code — deploy upstream headroom image, no Go plugins or custom Python endpoints
-- Separation of concerns — compression and auth/metering are independent services with
-  independent scaling, lifecycle, and updates
-- No resource overhead on BBR pods (headroom runs in its own pods)
-- Multi-provider native — headroom routes by API format without any MaaS configuration
-- MaaS sees compressed tokens — metering reflects actual cost
+- Full headroom pipeline including CacheAligner (10x cache savings), session tracking, CCR cache
+- Shared GPU pool scales efficiently (3-5 replicas serve 50+ users vs per-pod sidecars)
+- Zero user changes — same MaaS URL, same key
+- MaaS handles auth, metering, per-user tracking — no new user-facing services
+- Simpler Go plugin than Option D — no custom selection logic, headroom handles it
+- No routing complexity — plugin calls service directly over cluster network
 
-**Option D (BBR Plugin)** is a viable fallback if Option A routing proves difficult on
-a specific cluster. It works but introduces custom code, couples compression to the
-BBR lifecycle, and adds significant sidecar resource overhead (4Gi + 4 CPU per pod).
+**Option A (Headroom Before MaaS)** is the cleanest separation of concerns but requires
+users to change their URL and doesn't integrate with MaaS auth/metering natively.
+Good for standalone deployments without MaaS.
+
+**Option D (BBR Sidecar)** is a proven fallback but misses CacheAligner and session
+tracking, duplicates resources per pod, and requires custom `/v1/compress-raw` endpoint.
 
 **Option B (After MaaS)** is not recommended — MaaS modifies the request before headroom
-sees it (format translation, key injection), which interferes with headroom's session
-tracking and compression logic.
+sees it, interfering with headroom's compression logic.
 
 ### Suggested plan:
-1. **Week 1**: Deploy Option A on sandbox659 — headroom as a Service, MaaS forwards to it
-2. **Week 1**: Verify: user → headroom (compress) → MaaS (auth, meter) → provider
-3. **Week 2**: Pilot with 3-5 users (Claude Code + Codex) — monitor both dashboards
-4. **Week 3**: Evaluate compression savings, latency impact, decide on GPU for production
-5. **Fallback**: If Option A routing doesn't work, deploy Option D (code exists, proven)
+1. **Week 1**: Deploy headroom service on sandbox659 (Python wrapper, ~20 lines)
+2. **Week 1**: Update Go plugin to call `/v1/compress` with full message array
+3. **Week 1**: Add to ConfigMap, rebuild image, verify e2e
+4. **Week 2**: Pilot with 5-10 users (Claude Code + Codex) — monitor dashboards
+5. **Week 3**: Evaluate compression + cache savings, decide on GPU for production
 
 ## Compression Stack: Kompress ML + Smart_Crusher
 
