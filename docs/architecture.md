@@ -350,6 +350,44 @@ blocker makes it impractical without significant infrastructure changes.
 | Concurrent users | ~20 | ~200 |
 | Replicas (100 users) | 3-5 | 1 |
 
+## Updates from Noy's Dogfood Environment (sandbox659)
+
+Noy has a newer cluster (sandbox659) with significant improvements over sandbox311.
+This changes the viability of several options:
+
+### What's new in sandbox659:
+1. **PR #301 (passthrough) IS deployed** — `/v1/messages` works, multi-model works
+   - Single URL per provider: `/llm/ext-opus` handles ALL Anthropic models
+   - Users switch models via request body, not URL
+   - Claude Code `/model` switching works
+2. **Codex (OpenAI) support** — `ext-gpt55` route with `openai-responses` format
+3. **Body-based model resolution** — model resolved from X-Gateway-Model-Name header
+   (set from request body), not from URL path
+4. **Lua filter for auth** — copies `x-api-key` → `Authorization: Bearer` for Anthropic SDK
+5. **EnvoyFilter: INSERT_BEFORE router** (not INSERT_AFTER wasm) — this may fix
+   the ext-proc routing ordering issue that blocked Option B
+6. **Combined build image** — cherry-picks multiple PRs including headroom branch
+
+### Impact on options:
+
+**Option B (After MaaS)** — may now be viable. The `INSERT_BEFORE router` positioning
+and body-based model resolution might solve the routing issue we hit on sandbox311.
+Worth re-testing on sandbox659.
+
+**Option D (BBR Plugin)** — even stronger. The combined build already includes
+Yossi's headroom branch. The sidecar just needs to be added to the deployment.
+Body-based model resolution means no model mismatch issues.
+
+**Codex support** — headroom supports OpenAI Responses API (`/v1/responses`) natively.
+Both Claude Code and Codex users would get compression through the same headroom
+deployment.
+
+### For Option D on sandbox659:
+The headroom plugin code is already in the combined build image (`v2` tag). To enable:
+1. Add headroom sidecar container to the payload-processing deployment
+2. Add `headroom:headroom:{...}` to the plugin chain (after metering, before model-resolver)
+3. No image rebuild needed — the plugin is registered
+
 ## Open Items
 
 1. **Vertex AI compression** — headroom's LiteLLM backend bypasses compression.
@@ -358,5 +396,5 @@ blocker makes it impractical without significant infrastructure changes.
    Waiting on PR #138. Not a headroom issue.
 3. **Per-user header** — Claude Code doesn't natively set x-headroom-user-id.
    Options: apiKeyHelper injects it, or use API key as user identifier.
-4. **Model flexibility** — current MaaS image rejects models that don't match
-   ExternalModel. PR #301 (on main, not deployed) fixes this.
+4. **Test on sandbox659** — re-evaluate Option B and D on Noy's newer cluster
+   where PR #301 and body-based routing are deployed.
