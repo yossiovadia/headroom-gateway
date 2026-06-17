@@ -383,49 +383,196 @@ Without it, compressed text varies slightly each time → cache miss every reque
 
 ## Comparison Matrix
 
-| Aspect | A: Before MaaS | B: After MaaS | C: Standalone | D: BBR Sidecar | E: Shared Service |
-|--------|----------------|---------------|---------------|----------------|-------------------|
-| **Compression** | YES | YES | YES | YES (53%) | YES (full pipeline) |
-| **CacheAligner** | YES | YES | YES | **NO** | **YES** |
-| **Session tracking** | YES (proxy) | YES | YES | NO (turn heuristic) | **YES** |
-| **Auth/key mgmt** | MaaS | MaaS | Manual | MaaS | **MaaS** |
-| **Per-user tracking** | Needs header | Native | Needs header | Native | **Native** |
-| **Metering** | Compressed tokens | Original tokens | Own dashboard | Compressed | **Compressed** |
-| **Routing complexity** | Low | HIGH | None | None (localhost) | **None (service)** |
-| **User changes** | New URL | New path | New URL + key | **None** | **None** |
-| **Custom code** | None | None | None | Go + Python | **Go + Python (simpler)** |
-| **Resource per pod** | None | None | None | 4Gi + 4CPU each | **Shared pool** |
-| **GPU sharing** | Own pool | N/A | Own pool | Per-pod (expensive) | **Shared pool** |
-| **Scale to 50 users** | Good | Good | Good | OK | **Best** |
+| Aspect | A: Before MaaS | B: After MaaS | C: Standalone | D: BBR Sidecar | E: Custom Service | **E-Proxy (Recommended)** |
+|--------|----------------|---------------|---------------|----------------|-------------------|---------------------------|
+| **Compression** | YES | YES | YES | YES (53%) | YES (full pipeline) | **YES (full pipeline)** |
+| **CacheAligner** | YES | YES | YES | **NO** | YES | **YES** |
+| **Session tracking** | YES | YES | YES | NO | via compress() | **YES (native)** |
+| **CCR (retrieve originals)** | YES | YES | YES | NO | NO | **YES** |
+| **Built-in dashboard** | YES | N/A | YES | NO | Custom HTML | **YES (`/dashboard`)** |
+| **Prometheus metrics** | YES | N/A | YES | NO | NO | **YES (`/metrics`)** |
+| **Auth/key mgmt** | MaaS | MaaS | Manual | MaaS | MaaS | **MaaS** |
+| **Per-user tracking** | Needs header | Native | Needs header | Native | Custom code | **Native** |
+| **Routing complexity** | Low | HIGH | None | None | None | **None** |
+| **User changes** | New URL | New path | New URL + key | None | None | **None** |
+| **Custom code to maintain** | None | None | None | Go + Python | Go + 120 lines Python | **Go plugin only** |
+| **Resource per pod** | None | None | None | 4Gi + 4CPU each | Shared pool | **Shared pool** |
+| **GPU sharing** | Own pool | N/A | Own pool | Per-pod | Shared pool | **Shared pool** |
+| **Upgrade path** | Rebuild image | Rebuild image | Rebuild image | Code change + rebuild | Code change + rebuild | **Rebuild image only** |
+
+### Option E-Proxy: Headroom Proxy as Shared Compression Service (Recommended)
+
+```
+                    ┌─────────────────────────┐     ┌──────────────────────────┐
+                    │    MaaS/BBR Pod          │     │  Headroom Proxy          │
+                    │                         │     │  (shared Deployment)     │
+Users ──────────────│  ┌──────────────┐       │     │                          │
+(Claude Code,       │  │  BBR ext-proc │───────────▶│  POST /v1/compress       │
+ Codex, etc.)       │  │              │◀───────────│  (built-in endpoint)     │
+                    │  │ • Auth       │       │     │                          │
+                    │  │ • Headroom   │       │     │  All of this is FREE:    │
+                    │  │   plugin     │       │     │  • /stats (rich summary) │
+                    │  │ • Metering   │       │     │  • /dashboard (built-in) │
+                    │  │ • API trans  │       │     │  • /metrics (Prometheus) │
+                    │  │ • Key inject │       │     │  • /readyz, /livez       │
+                    │  └──────────────┘       │     │  • CCR (retrieve orig.)  │
+                    └─────────────────────────┘     │  • Session tracking      │
+                                                    │  • CacheAligner          │
+                                                    │  • CostTracker           │
+                                                    │  • Kompress ML (GPU)     │
+                                                    └──────────────────────────┘
+```
+
+**User config:** Same as MaaS today — no change.
+```bash
+ANTHROPIC_BASE_URL=https://maas.company.com/llm/ext-opus
+ANTHROPIC_API_KEY=<MaaS-key>
+```
+
+**How it works:**
+1. User sends request to MaaS (exactly as today)
+2. BBR headroom plugin sends the FULL messages array to headroom proxy's `/v1/compress`
+3. Headroom proxy runs the full `TransformPipeline`: ContentRouter → SmartCrusher,
+   Kompress, CodeCompressor, CacheAligner — the exact same pipeline used in proxy mode
+4. Returns compressed messages with stats + CCR hashes
+5. Plugin replaces messages in request body, writes savings to CycleState
+6. BBR continues: api-translation, apikey-injection, metering
+
+**Why E-Proxy over original Option E:**
+
+The original Option E wrapped headroom's `compress()` library function in a custom
+FastAPI service (~120 lines). This worked but meant maintaining custom code for:
+- Stats aggregation and persistence
+- Dashboard HTML
+- Health/readiness endpoints
+- Per-user tracking
+- Cost calculations
+- Prometheus metrics
+
+The headroom proxy already ships ALL of this. Its `/v1/compress` endpoint uses the
+full `TransformPipeline` (not bare `compress()`) and the proxy has built-in:
+
+| Feature | Original E (custom service) | E-Proxy (headroom proxy) |
+|---------|----------------------------|--------------------------|
+| `/v1/compress` endpoint | Custom 120-line FastAPI | Built-in, production-grade |
+| Stats (`/stats`) | Custom, in-memory, lost on restart | Built-in, session summary, cost breakdown |
+| Dashboard (`/dashboard`) | Custom HTML, manually deployed | Built-in, ships with headroom |
+| Prometheus metrics (`/metrics`) | Not implemented | Built-in, per-strategy counters |
+| Health checks (`/readyz`, `/livez`) | Custom `/health` only | Built-in, checks model load status |
+| CCR (retrieve original content) | Not available | Built-in, LLM can retrieve compressed originals |
+| Session tracking | Not available | Built-in, turn-distance aware |
+| CacheAligner | Via `compress()` | Via `TransformPipeline` (full pipeline) |
+| CostTracker with budgets | Not available | Built-in |
+| Per-user tracking | Custom header parsing | Forward `x-maas-username`, proxy tracks |
+| Code to maintain | ~120 lines Python + dashboard HTML | Zero — just env vars |
+
+**The `/v1/compress` contract is identical.** The Go plugin sends
+`{messages: [...], model: "..."}` and gets back
+`{messages: [...], tokens_before, tokens_after, tokens_saved, compression_ratio}`.
+No Go changes needed — swap the service, keep the plugin.
+
+**Deployment:**
+```dockerfile
+FROM python:3.12-slim
+RUN pip install --no-cache-dir "headroom-ai[ml]" onnxruntime
+ENV HF_HOME=/opt/huggingface
+ENV HOME=/opt/app
+RUN mkdir -p /opt/huggingface /opt/app && \
+    python -c "from huggingface_hub import snapshot_download; \
+    snapshot_download('chopratejas/kompress-v2-base'); \
+    snapshot_download('answerdotai/ModernBERT-base')" && \
+    chmod -R 777 /opt/huggingface /opt/app
+EXPOSE 8787
+ENTRYPOINT ["headroom", "proxy", "--port", "8787", "--host", "0.0.0.0"]
+```
+
+No custom Python code. No custom dashboard. No custom stats.
+
+**Build independence:** Yossi controls the headroom service image entirely.
+Noy controls the BBR image. The only shared contract is `POST /v1/compress`.
+One final ask from Noy: forward `x-maas-username` header in the Go plugin's
+HTTP call to headroom service. After that, the Go plugin is frozen — all future
+changes happen in the headroom service (which is just `headroom proxy`).
+
+**Pros:**
+- Everything from Option E, PLUS:
+- **Zero custom code** — no service wrapper, no dashboard, no stats aggregation to maintain
+- **Production-grade observability** — built-in `/stats`, `/metrics`, `/dashboard`
+- **CCR** — compressed content retrievable by the LLM via hash
+- **Session tracking** — turn-distance aware compression (knows which content is "old")
+- **CostTracker** — budget limits, cost breakdown by provider
+- **Upgrades for free** — `pip install --upgrade headroom-ai` gets new features without code changes
+- **Same Go plugin contract** — zero changes to BBR side
+
+**Cons:**
+- Headroom proxy starts a forwarding backend (unused — we only use `/v1/compress`)
+- Proxy startup is heavier than bare `compress()` (loads more subsystems) — ~10s vs ~5s
+- Proxy mode settings need to be configured for the service use case:
+  - `HEADROOM_SKIP_UPSTREAM_CHECK=1` — don't check provider connectivity on startup
+  - `HEADROOM_HOST=0.0.0.0` — listen on all interfaces
+  - `HEADROOM_MODE=token` — optimize for token savings
+- Stats are in-memory by default (no persistence). CCR can persist via
+  `HEADROOM_CCR_BACKEND=sqlite`. General stats need a PVC mount or
+  are reset on pod restart (acceptable for MVP — proxy's `/stats` rebuilds
+  from the request log if `HEADROOM_LOG_REQUESTS=true` + PVC for log dir)
+- The proxy's `/stats` JSON schema is significantly richer than what our custom
+  dashboard expects. Our dashboard will need to be adapted to the proxy's schema,
+  OR we use the proxy's built-in `/dashboard` instead
+
+**`/v1/compress` response format — compatible with Go plugin:**
+```json
+{
+  "messages": [...],
+  "tokens_before": 1000,
+  "tokens_after": 500,
+  "tokens_saved": 500,
+  "compression_ratio": 0.5,
+  "transforms_applied": ["SmartCrusher", "ContentRouter"],
+  "transforms_summary": "...",
+  "ccr_hashes": ["hash1", "hash2"]
+}
+```
+The Go plugin reads `messages`, `tokens_before`, `tokens_after`, `tokens_saved`,
+`compression_ratio` — all present. Extra fields (`transforms_summary`, `ccr_hashes`)
+are ignored by the Go plugin. **No Go changes needed.**
+
+---
 
 ## Recommendation
 
-**Option E (Shared Headroom Compression Service)** is the recommended architecture.
+**Option E-Proxy** is the recommended architecture.
 
-Rationale:
-- Full headroom pipeline including CacheAligner (10x cache savings), session tracking, CCR cache
-- Shared GPU pool scales efficiently (3-5 replicas serve 50+ users vs per-pod sidecars)
+This is Option E (shared headroom compression service called by BBR plugin) but using
+the headroom proxy itself instead of a custom Python wrapper. The proxy ships everything
+we'd otherwise have to build and maintain: stats, dashboard, metrics, CCR, session
+tracking, health checks, cost tracking.
+
+**Why E-Proxy wins:**
+- Full headroom pipeline including CacheAligner (10x cache savings), session tracking, CCR
+- Shared GPU pool scales efficiently (3-5 replicas serve 50+ users)
 - Zero user changes — same MaaS URL, same key
+- Zero custom service code — just deploy `headroom proxy`
+- Built-in observability: `/stats`, `/metrics`, `/dashboard`
 - MaaS handles auth, metering, per-user tracking — no new user-facing services
-- Simpler Go plugin than Option D — no custom selection logic, headroom handles it
-- No routing complexity — plugin calls service directly over cluster network
+- Same Go plugin contract as original Option E — `POST /v1/compress`
+- Upgrades to headroom get picked up by rebuilding the image — no code changes
 
-**Option A (Headroom Before MaaS)** is the cleanest separation of concerns but requires
-users to change their URL and doesn't integrate with MaaS auth/metering natively.
-Good for standalone deployments without MaaS.
+**Option A (Headroom Before MaaS)** is still a valid standalone architecture for
+deployments without MaaS — users point directly at headroom which forwards to the provider.
 
 **Option D (BBR Sidecar)** is a proven fallback but misses CacheAligner and session
 tracking, duplicates resources per pod, and requires custom `/v1/compress-raw` endpoint.
 
-**Option B (After MaaS)** is not recommended — MaaS modifies the request before headroom
-sees it, interfering with headroom's compression logic.
+**Option B (After MaaS)** is not recommended — Envoy routing complexity and request
+mutation before headroom interfere with compression.
 
 ### Suggested plan:
-1. **Week 1**: Deploy headroom service on sandbox659 (Python wrapper, ~20 lines)
-2. **Week 1**: Update Go plugin to call `/v1/compress` with full message array
-3. **Week 1**: Add to ConfigMap, rebuild image, verify e2e
-4. **Week 2**: Pilot with 5-10 users (Claude Code + Codex) — monitor dashboards
-5. **Week 3**: Evaluate compression + cache savings, decide on GPU for production
+1. Build headroom proxy image with pre-downloaded models (Dockerfile only, no custom code)
+2. Deploy as StatefulSet on sandbox659 with PVC for stats persistence
+3. Point existing Go plugin at the new service (same `/v1/compress` contract)
+4. Verify built-in `/stats` and `/dashboard` work with the existing compression dashboard
+5. Pilot with 5-10 users (Claude Code + Codex) — monitor built-in dashboards
+6. Add GPU support (`onnxruntime-gpu`) for production latency
 
 ## Compression Stack: Kompress ML + Smart_Crusher
 
@@ -506,11 +653,18 @@ The headroom plugin code is already in the combined build image (`v2` tag). To e
 
 ## Open Items
 
-1. **Vertex AI compression** — headroom's LiteLLM backend bypasses compression.
+1. **Go plugin header forwarding** — One-time ask from Noy: forward `x-maas-username`
+   header from the request to the headroom service call. After that, the Go plugin
+   is frozen. All future changes happen in the headroom proxy service (image rebuild only).
+2. **GPU support** — Deploy with `onnxruntime-gpu` for <100ms Kompress latency (currently
+   ~3s on CPU). Requires NVIDIA GPU Operator on the OpenShift cluster.
+3. **Stats persistence** — Headroom proxy stats are in-memory by default. Need to evaluate
+   headroom's built-in `store_url` config (SQLite/JSONL) or mount a PVC for the proxy's
+   data directory.
+4. **Vertex AI compression** — headroom's LiteLLM backend bypasses compression.
    Needs upstream headroom fix or wrapper. Anthropic + OpenAI work today.
-2. **Streaming + metering** — can't coexist due to SSE parsing issue in BBR.
+5. **Streaming + metering** — can't coexist due to SSE parsing issue in BBR.
    Waiting on PR #138. Not a headroom issue.
-3. **Per-user header** — Claude Code doesn't natively set x-headroom-user-id.
-   Options: apiKeyHelper injects it, or use API key as user identifier.
-4. **Test on sandbox659** — re-evaluate Option B and D on Noy's newer cluster
-   where PR #301 and body-based routing are deployed.
+6. **Dashboard compatibility** — Verify headroom's built-in `/dashboard` shows the
+   stats we need (per-user, cost savings, compression breakdown). If not, our custom
+   dashboard can read from `/stats` which the proxy also exposes.

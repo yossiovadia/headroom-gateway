@@ -86,7 +86,7 @@ tr:hover td{background:var(--bg-hover)}
 <div class="kpi-row">
   <div class="kpi"><span class="kpi-label">Total Requests</span><span class="kpi-value cyan" id="kpi-requests">--</span><span class="kpi-sub" id="kpi-compressed">-- compressed</span></div>
   <div class="kpi"><span class="kpi-label">Tokens Saved</span><span class="kpi-value green" id="kpi-tokens">--</span><span class="kpi-sub" id="kpi-tokens-sub">total input: --</span></div>
-  <div class="kpi"><span class="kpi-label">Cost Saved</span><span class="kpi-value orange" id="kpi-cost">--</span><span class="kpi-sub" id="kpi-cost-sub">total spend: --</span></div>
+  <div class="kpi"><span class="kpi-label">Est. Cost Saved</span><span class="kpi-value orange" id="kpi-cost">--</span><span class="kpi-sub" id="kpi-cost-sub">at $15/MTok (Opus rate)</span></div>
   <div class="kpi"><span class="kpi-label">Compression Rate</span><span class="kpi-value purple" id="kpi-rate">--</span><span class="kpi-sub" id="kpi-best">best: --</span></div>
 </div>
 
@@ -162,13 +162,13 @@ function updateAll(d){
     <div class="reason-row"><span class="reason-label">Original Input</span><div class="bar-bg"><div class="bar-fill" style="width:100%;background:var(--blue)"></div></div><span class="reason-count">${fmtK(totalIn)}</span></div>
     <div class="reason-row"><span class="reason-label">After Compression</span><div class="bar-bg"><div class="bar-fill" style="width:${afterPct}%;background:var(--green)"></div></div><span class="reason-count">${fmtK(totalIn-totalSaved)}</span></div>
     <div class="reason-row"><span class="reason-label">Tokens Saved</span><div class="bar-bg"><div class="bar-fill" style="width:${savedPct}%;background:var(--orange)"></div></div><span class="reason-count">${fmtK(totalSaved)}</span></div>
-    <div class="reason-row"><span class="reason-label">Cost Without Headroom</span><div class="bar-bg"><div class="bar-fill" style="width:100%;background:var(--purple)"></div></div><span class="reason-count">$${(cost.without_headroom_usd||0).toFixed(2)}</span></div>
-    <div class="reason-row"><span class="reason-label">Cost With Headroom</span><div class="bar-bg"><div class="bar-fill" style="width:${afterPct}%;background:var(--cyan)"></div></div><span class="reason-count">$${(cost.with_headroom_usd||0).toFixed(2)}</span></div>
+    <div class="reason-row"><span class="reason-label">Est. Cost Without Headroom</span><div class="bar-bg"><div class="bar-fill" style="width:100%;background:var(--purple)"></div></div><span class="reason-count">$${(cost.without_headroom_usd||0).toFixed(2)}</span></div>
+    <div class="reason-row"><span class="reason-label">Est. Cost With Headroom</span><div class="bar-bg"><div class="bar-fill" style="width:${afterPct}%;background:var(--cyan)"></div></div><span class="reason-count">$${(cost.with_headroom_usd||0).toFixed(2)}</span></div>
   `;
 
   // Users donut
   const users={};
-  reqs.forEach(r=>{const u=(r.tags||{})['user-id']||'anonymous';if(!users[u])users[u]={requests:0,tokens_in:0,saved:0,cost:0};users[u].requests++;users[u].tokens_in+=r.input_tokens_original||0;users[u].saved+=r.tokens_saved||0;users[u].cost+=(r.input_tokens_original||0)*15/1000000;});
+  reqs.forEach(r=>{const u=(r.tags||{})['user-id']||'anonymous';const cpm=r.cost_per_mtok||15;if(!users[u])users[u]={requests:0,tokens_in:0,saved:0,cost:0,cost_saved:0};users[u].requests++;users[u].tokens_in+=r.input_tokens_original||0;users[u].saved+=r.tokens_saved||0;users[u].cost+=(r.input_tokens_original||0)*cpm/1000000;users[u].cost_saved+=r.cost_saved_usd||0;});
   const ue=Object.entries(users).sort((a,b)=>b[1].cost-a[1].cost).slice(0,10);
 
   const ctx2=document.getElementById('chart-users').getContext('2d');
@@ -181,9 +181,9 @@ function updateAll(d){
   // User table
   const ut=document.getElementById('user-table');
   if(ue.length===0){ut.innerHTML='<div class="empty">No user data yet</div>';return;}
-  ut.innerHTML=`<table><thead><tr><th>User</th><th class="num">Requests</th><th class="num">Input Tokens</th><th class="num">Tokens Saved</th><th class="num">Savings %</th><th class="num">Cost</th><th class="num">Saved</th></tr></thead><tbody>${ue.map(([name,d])=>{
+  ut.innerHTML=`<table><thead><tr><th>User</th><th class="num">Requests</th><th class="num">Input Tokens</th><th class="num">Tokens Saved</th><th class="num">Savings %</th><th class="num">Est. Cost</th><th class="num">Est. Saved</th></tr></thead><tbody>${ue.map(([name,d])=>{
     const pct=d.tokens_in>0?(d.saved/d.tokens_in*100).toFixed(1):'0.0';
-    const savedCost=(d.saved*15/1000000).toFixed(4);
+    const savedCost=(d.cost_saved||0).toFixed(4);
     const tc=name==='anonymous'?'tag-orange':'tag-green';
     return `<tr><td><span class="tag ${tc}">${name}</span></td><td class="num">${d.requests}</td><td class="num">${fmtK(d.tokens_in)}</td><td class="num" style="color:var(--green)">${fmtK(d.saved)}</td><td class="num" style="color:${parseFloat(pct)>0?'var(--green)':'var(--text2)'}">${pct}%</td><td class="num">$${d.cost.toFixed(4)}</td><td class="num" style="color:var(--orange)">$${savedCost}</td></tr>`;
   }).join('')}</tbody></table>`;
