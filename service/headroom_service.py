@@ -152,6 +152,8 @@ _prom_errors = 0
 class CompressRequest(BaseModel):
     messages: list
     model: str = "default"
+    protect_recent: int | None = None
+    min_tokens_to_compress: int | None = None
 
 
 @app.post("/v1/compress")
@@ -164,7 +166,12 @@ def compress_messages(req: CompressRequest, request: Request):
     )
 
     try:
-        result = compress(messages=req.messages, model=req.model)
+        kwargs = {}
+        if req.protect_recent is not None:
+            kwargs["protect_recent"] = req.protect_recent
+        if req.min_tokens_to_compress is not None:
+            kwargs["min_tokens_to_compress"] = req.min_tokens_to_compress
+        result = compress(messages=req.messages, model=req.model, **kwargs)
     except Exception as e:
         _prom_errors += 1
         return {"messages": req.messages, "tokens_before": 0, "tokens_after": 0,

@@ -14,7 +14,39 @@
 }
 body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:20px;max-width:1400px;margin:0 auto}
 .tabs{display:flex;gap:4px;margin-bottom:16px}
-.tabs a{background:var(--cyan);color:#fff;border:1px solid var(--cyan);padding:8px 20px;border-radius:6px;font-size:14px;text-decoration:none}
+.tabs a{background:var(--bg-card);color:var(--text2);border:1px solid var(--border);padding:8px 20px;border-radius:6px;font-size:14px;text-decoration:none;cursor:pointer;transition:all .2s}
+.tabs a:hover{background:var(--bg-hover);color:var(--text)}
+.tabs a.active{background:var(--cyan);color:#fff;border-color:var(--cyan)}
+.tab-content{display:none}.tab-content.active{display:block}
+.pg-layout{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+@media(max-width:900px){.pg-layout{grid-template-columns:1fr}}
+.pg-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px;display:flex;flex-direction:column}
+.pg-panel h3{font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;font-weight:600}
+.pg-textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.5;resize:vertical;min-height:300px;width:100%;flex:1}
+.pg-textarea:focus{outline:none;border-color:var(--cyan)}
+.pg-textarea[readonly]{color:var(--text2);cursor:default}
+.pg-controls{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.pg-btn{background:var(--cyan);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .2s}
+.pg-btn:hover{opacity:.85}
+.pg-btn:disabled{opacity:.4;cursor:not-allowed}
+.pg-select{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px;cursor:pointer}
+.pg-select:focus{outline:none;border-color:var(--cyan)}
+.pg-results{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.pg-stat{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
+.pg-stat-label{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.pg-stat-value{font-size:24px;font-weight:700}
+@media(max-width:600px){.pg-results{grid-template-columns:repeat(2,1fr)}}
+.pg-stage{display:flex;align-items:flex-start;gap:12px;padding:8px 0;position:relative}
+.pg-stage:not(:last-child)::after{content:'';position:absolute;left:9px;top:28px;bottom:-8px;width:2px;background:var(--border)}
+.pg-stage-dot{width:20px;height:20px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;z-index:1}
+.pg-stage-dot.active{background:var(--green);color:#fff}
+.pg-stage-dot.skipped{background:var(--border);color:var(--text2)}
+.pg-stage-dot.protected{background:var(--blue);color:#fff}
+.pg-stage-info{flex:1}
+.pg-stage-name{font-size:14px;font-weight:600;color:var(--text)}
+.pg-stage-name.skipped{color:var(--text2)}
+.pg-stage-detail{font-size:12px;color:var(--text2);margin-top:2px}
+.pg-stage-savings{font-size:12px;color:var(--green);font-weight:600;margin-top:2px}
 header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
 header h1{font-size:22px;font-weight:600;color:var(--cyan)}
 header h1 span{color:var(--text2);font-weight:400;font-size:14px;margin-left:8px}
@@ -68,7 +100,7 @@ tr:hover td{background:var(--bg-hover)}
 </style>
 </head>
 <body>
-<div class="tabs"><a href="#" class="active">Compression</a></div>
+<div class="tabs"><a href="#" id="tab-stats" class="active" onclick="switchTab('stats')">Dashboard</a><a href="#" id="tab-playground" onclick="switchTab('playground')">Playground</a></div>
 <header>
   <h1>Headroom Compression Dashboard <span id="last-refresh"></span></h1>
   <div class="header-right">
@@ -83,6 +115,7 @@ tr:hover td{background:var(--bg-hover)}
   <button onclick="applyUrl()">Connect</button>
 </div>
 
+<div id="view-stats" class="tab-content active">
 <div class="kpi-row">
   <div class="kpi"><span class="kpi-label">Total Requests</span><span class="kpi-value cyan" id="kpi-requests">--</span><span class="kpi-sub" id="kpi-compressed">-- compressed</span></div>
   <div class="kpi"><span class="kpi-label">Tokens Saved</span><span class="kpi-value green" id="kpi-tokens">--</span><span class="kpi-sub" id="kpi-tokens-sub">total input: --</span></div>
@@ -105,6 +138,55 @@ tr:hover td{background:var(--bg-hover)}
   <h2 class="section-title">Recent Activity <span style="color:var(--text2);font-size:12px;font-weight:400">(live)</span></h2>
   <div class="scroll-box" id="activity-table"></div>
 </div>
+
+</div><!-- end view-stats -->
+
+<div id="view-playground" class="tab-content">
+  <div class="pg-controls">
+    <select id="pg-preset" class="pg-select" onchange="loadPreset()">
+      <option value="">Select a sample...</option>
+      <option value="k8s-pods">Kubernetes Pods (30 pods, JSON) — SmartCrusher</option>
+      <option value="build-logs">Build Logs (50 lines) — SearchCompressor</option>
+      <option value="source-code">Python Source Code (~90 lines) — Kompress ML</option>
+      <option value="api-response">API Search Results (20 items) — Mixed</option>
+      <option value="docs-prose">Documentation (20 sections) — Kompress ML (text)</option>
+      <option value="error-logs">Error Logs — Protected (no compression)</option>
+    </select>
+    <button class="pg-btn" id="pg-compress-btn" onclick="runPlayground()">Compress</button>
+    <span id="pg-status" style="color:var(--text2);font-size:12px"></span>
+  </div>
+
+  <div class="pg-results" id="pg-results" style="display:none">
+    <div class="pg-stat"><div class="pg-stat-label">Tokens Before</div><div class="pg-stat-value cyan" id="pg-before">--</div></div>
+    <div class="pg-stat"><div class="pg-stat-label">Tokens After</div><div class="pg-stat-value green" id="pg-after">--</div></div>
+    <div class="pg-stat"><div class="pg-stat-label">Tokens Saved</div><div class="pg-stat-value orange" id="pg-saved">--</div></div>
+    <div class="pg-stat"><div class="pg-stat-label">Savings</div><div class="pg-stat-value purple" id="pg-pct">--</div></div>
+  </div>
+
+  <div class="pg-layout">
+    <div class="pg-panel">
+      <h3>Input (Original Tool Output)</h3>
+      <textarea class="pg-textarea" id="pg-input" placeholder="Paste content here or select a sample above..."></textarea>
+    </div>
+    <div class="pg-panel">
+      <h3>Output (After Compression)</h3>
+      <textarea class="pg-textarea" id="pg-output" readonly placeholder="Compressed output will appear here..."></textarea>
+    </div>
+  </div>
+
+  <div id="pg-pipeline" style="display:none">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="pg-panel">
+        <h3>Compression Pipeline</h3>
+        <div id="pg-pipeline-stages" style="padding:8px 0"></div>
+      </div>
+      <div class="pg-panel">
+        <h3>What Happened</h3>
+        <div id="pg-pipeline-explain" style="padding:8px 0;font-size:13px;line-height:1.8;color:var(--text)"></div>
+      </div>
+    </div>
+  </div>
+</div><!-- end view-playground -->
 
 <script>
 let BASE_URL=window.location.origin;
@@ -205,6 +287,159 @@ function updateAll(d){
 
 function fmt(n){return n==null?'--':Number(n).toLocaleString();}
 function fmtK(n){if(n==null)return'--';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return String(n);}
+
+// --- Tab switching ---
+function switchTab(tab){
+  document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
+  document.querySelectorAll('.tabs a').forEach(el=>el.classList.remove('active'));
+  document.getElementById('view-'+tab).classList.add('active');
+  document.getElementById('tab-'+tab).classList.add('active');
+  if(tab==='stats')refresh();
+}
+
+// --- Playground presets ---
+const PRESETS={
+  'k8s-pods':JSON.stringify(Array.from({length:30},(_,i)=>({name:`pod-${String(i).padStart(3,'0')}`,namespace:`ns-${i%5}`,status:i===8?'CrashLoopBackOff':'Running',ip:`10.0.${i}.1`,node:`worker-${i%3+1}.cluster.local`,restarts:i%4,age:`${i+1}d`,cpu:`${10+i*5}m`,memory:`${64+i*8}Mi`,labels:{app:`app-${i%5}`,version:`v${i%3+1}.${i%10}.0`,tier:['frontend','backend','data'][i%3]}})),null,2),
+  'build-logs':Array.from({length:50},(_,i)=>{
+    const ts=`2026-06-17T08:${String(Math.floor(i/60)).padStart(2,'0')}:${String(i%60).padStart(2,'0')}Z`;
+    if(i<15)return`${ts} [INFO] Installing package-${i}==${i}.0.${i}`;
+    if(i<35)return`${ts} [TEST] test_api_${['health','auth','users','orders','payments','search','cache','metrics','rate','notify'][i%10]}_${['list','create','update','delete'][i%4]} ... PASSED (${(0.02+i*0.03).toFixed(2)}s)`;
+    if(i<45)return`${ts} [BUILD] STEP ${i-35+1}/10: ${['FROM python:3.12-slim','COPY requirements.txt','RUN pip install','COPY src/','COPY config/','COPY migrations/','RUN pytest','WORKDIR /app','EXPOSE 8080','CMD uvicorn'][i-35]}`;
+    return`${ts} [INFO] Pipeline step ${i} completed`;
+  }).join('\n'),
+  'source-code':Array.from({length:40},(_,i)=>`def function_${i}(x, y, z=None, timeout=30, retries=3):\n    """Process item ${i} with validation and error handling."""\n    if x is None or y is None:\n        raise ValueError("Parameters x and y are required for function_${i}")\n    result = x * ${i+1} + y * ${i+2}\n    if z is not None:\n        result += z * ${i+3}\n    logger.info(f"function_${i} computed result={result} from x={x} y={y}")\n    return {"value": result, "function": "function_${i}", "status": "success"}\n`).join('\n'),
+  'docs-prose':Array.from({length:20},(_,i)=>`The configuration parameter number ${i} for the system module ${i%5} has a default value of ${i*10} and controls the behavior of the processing pipeline subsystem. When this parameter is set to values higher than ${i*50} the system automatically enables the batching optimization mode which significantly improves the overall throughput and efficiency of the data processing pipeline.`).join('\n\n'),
+  'api-response':JSON.stringify({query:"kubernetes deployment best practices",results:Array.from({length:20},(_,i)=>({title:`Result ${i+1}: ${['Container orchestration patterns','Pod scheduling strategies','Resource quota management','Network policy configuration','Service mesh implementation','Rolling update strategies','Health check configuration','Persistent volume claims','ConfigMap best practices','Secret management'][i%10]}`,url:`https://docs.example.com/k8s/article-${i+1}`,snippet:`This article covers ${['how to optimize','best practices for','common pitfalls in','advanced techniques for','getting started with'][i%5]} ${['container deployment','pod lifecycle','resource allocation','network security','service discovery'][i%5]} in Kubernetes ${i<10?'1.28':'1.29'}. Published ${2024+Math.floor(i/10)}-${String(i%12+1).padStart(2,'0')}-15.`,relevance_score:0.95-i*0.03,word_count:1200+i*150})),total_results:2847,search_time_ms:145},null,2),
+  'error-logs':`2026-06-17T10:00:00Z [INFO] Processing request batch 1\n2026-06-17T10:00:01Z [INFO] Processing request batch 2\n2026-06-17T10:00:02Z [INFO] Processing request batch 3\n2026-06-17T10:00:03Z [WARN] Slow query detected: 2.3s\n2026-06-17T10:00:04Z [INFO] Processing request batch 4\n2026-06-17T10:00:05Z [ERROR] Connection refused to database at 10.0.2.1:5432\n2026-06-17T10:00:06Z [ERROR] Retrying connection attempt 1/3...\n2026-06-17T10:00:07Z [ERROR] Connection refused to database at 10.0.2.1:5432\n2026-06-17T10:00:08Z [ERROR] Retrying connection attempt 2/3...\n2026-06-17T10:00:09Z [ERROR] Connection refused to database at 10.0.2.1:5432\n2026-06-17T10:00:10Z [FATAL] Unable to connect to database after 3 retries\n2026-06-17T10:00:10Z [FATAL] Service shutting down due to unrecoverable error\n2026-06-17T10:00:10Z Process exited with code 1`
+};
+
+function loadPreset(){
+  const key=document.getElementById('pg-preset').value;
+  if(!key)return;
+  document.getElementById('pg-input').value=PRESETS[key]||'';
+  document.getElementById('pg-output').value='';
+  document.getElementById('pg-results').style.display='none';
+  document.getElementById('pg-transforms').style.display='none';
+}
+
+function renderPipeline(transforms,tokensBefore,tokensAfter,tokensSaved){
+  const el=document.getElementById('pg-pipeline');
+  const stagesEl=document.getElementById('pg-pipeline-stages');
+  const explainEl=document.getElementById('pg-pipeline-explain');
+
+  const active=new Set();
+  const protected_types=new Set();
+  transforms.forEach(t=>{
+    if(t.includes('smart_crusher'))active.add('smart_crusher');
+    else if(t.includes('router:search'))active.add('search');
+    else if(t.includes('router:text'))active.add('kompress');
+    else if(t.includes('router:kompress'))active.add('kompress');
+    else if(t.includes('router:mixed')){active.add('smart_crusher');active.add('kompress');}
+    else if(t.includes('router:code'))active.add('code');
+    else if(t.includes('protected:error'))protected_types.add('error');
+    else if(t.includes('protected:user'))protected_types.add('user');
+    else if(t.includes('protected:system'))protected_types.add('system');
+    else if(t.includes('excluded'))protected_types.add('excluded');
+  });
+
+  const stages=[
+    {id:'router',name:'ContentRouter',desc:'Detects content type and routes to best compressor',always:true},
+    {id:'smart_crusher',name:'SmartCrusher',desc:'JSON array compression — deduplicates structure, keeps important items',detail:'Rust-backed, instant'},
+    {id:'search',name:'SearchCompressor',desc:'Log and grep output compression — keeps errors, deduplicates repetitive lines',detail:'Rule-based, instant'},
+    {id:'kompress',name:'Kompress ML',desc:'ML text compression — ModernBERT tokenizer + ONNX model scores token importance',detail:'ModernBERT + ONNX, ~3s CPU / <100ms GPU'},
+    {id:'code',name:'CodeCompressor',desc:'AST-aware source code compression — preserves structure',detail:'Tree-sitter based'},
+    {id:'cache_aligner',name:'CacheAligner',desc:'Stabilizes prompt prefixes for provider KV cache hits (10x cheaper)',detail:'Detection only, no mutation'},
+  ];
+
+  let html='';
+  stages.forEach(s=>{
+    const fired=active.has(s.id)||s.always;
+    const dotClass=fired?'active':'skipped';
+    const nameClass=fired?'':'skipped';
+    const icon=fired?'&#10003;':'&#8212;';
+    let detail=s.detail||'';
+    if(fired&&s.id==='router'){
+      const detected=active.has('smart_crusher')?'JSON array':active.has('search')?'Log/grep output':active.has('kompress')?'Free text':active.has('code')?'Source code':'Content';
+      detail='Detected: '+detected;
+    }
+    if(fired&&tokensSaved>0&&(active.has(s.id))){
+      html+=`<div class="pg-stage"><div class="pg-stage-dot ${dotClass}">${icon}</div><div class="pg-stage-info"><div class="pg-stage-name">${s.name}</div><div class="pg-stage-detail">${s.desc}</div><div class="pg-stage-savings">${fmtK(tokensSaved)} tokens saved (${Math.round(tokensSaved/tokensBefore*100)}%)</div></div></div>`;
+    }else{
+      html+=`<div class="pg-stage"><div class="pg-stage-dot ${dotClass}">${icon}</div><div class="pg-stage-info"><div class="pg-stage-name ${nameClass}">${s.name}</div><div class="pg-stage-detail">${fired?detail:s.desc+' — not needed for this content'}</div></div></div>`;
+    }
+  });
+  stagesEl.innerHTML=html;
+
+  let explain=[];
+  // user messages are always protected — don't show, it's noise in the playground
+  if(protected_types.has('system'))explain.push('<span style="color:var(--blue)">&#9679;</span> <strong>System prompts protected</strong> — cache-hot instruction bytes');
+  if(protected_types.has('error'))explain.push('<span style="color:var(--orange)">&#9679;</span> <strong>Error output preserved</strong> — tracebacks and errors kept verbatim for debugging');
+  if(protected_types.has('excluded'))explain.push('<span style="color:var(--text2)">&#9679;</span> <strong>Tool excluded</strong> — this tool\'s output is configured to skip compression');
+
+  if(active.has('smart_crusher'))explain.push('<span style="color:var(--green)">&#9679;</span> <strong>SmartCrusher fired</strong> — detected JSON array, removed duplicate structure while keeping important items and anomalies');
+  if(active.has('search'))explain.push('<span style="color:var(--green)">&#9679;</span> <strong>SearchCompressor fired</strong> — detected log/grep output, compressed repetitive lines while preserving errors and timestamps');
+  if(active.has('kompress'))explain.push('<span style="color:var(--green)">&#9679;</span> <strong>Kompress ML fired</strong> — scored each token with ModernBERT, removed low-importance tokens while preserving meaning');
+  if(active.has('code'))explain.push('<span style="color:var(--green)">&#9679;</span> <strong>CodeCompressor fired</strong> — used AST to compress source code while preserving structure');
+
+  if(tokensSaved===0&&!protected_types.has('error'))explain.push('<span style="color:var(--text2)">&#9679;</span> No compression — content was too small (below 500 token threshold) or too recent');
+  if(tokensSaved>0)explain.push(`<span style="color:var(--cyan)">&#9679;</span> <strong>Result:</strong> ${fmtK(tokensBefore)} tokens &#8594; ${fmtK(tokensAfter)} tokens (${Math.round(tokensSaved/tokensBefore*100)}% saved, ${fmtK(tokensSaved)} tokens removed)`);
+
+  explainEl.innerHTML=explain.join('<br>');
+  el.style.display='block';
+}
+
+async function runPlayground(){
+  const input=document.getElementById('pg-input').value.trim();
+  if(!input){document.getElementById('pg-status').textContent='Paste content first';return;}
+
+  const btn=document.getElementById('pg-compress-btn');
+  btn.disabled=true;btn.textContent='Compressing...';
+  document.getElementById('pg-status').textContent='';
+
+  const messages=[
+    {role:'user',content:'show data'},
+    {role:'assistant',content:null,tool_calls:[{id:'c1',type:'function',function:{name:'tool_output',arguments:'{}'}}]},
+    {role:'tool',tool_call_id:'c1',content:input},
+    {role:'user',content:'analyze this'},
+    {role:'assistant',content:'I see the data. Let me analyze it.'},
+    {role:'user',content:'what patterns do you see?'},
+    {role:'assistant',content:'Several patterns are visible.'},
+    {role:'user',content:'continue with the analysis'},
+    {role:'assistant',content:'Looking deeper into the details.'},
+    {role:'user',content:'any issues?'},
+    {role:'assistant',content:'Let me check for problems.'},
+    {role:'user',content:'summarize your findings'},
+  ];
+
+  try{
+    const t0=performance.now();
+    const resp=await fetch(BASE_URL+'/v1/compress',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-maas-username':'playground'},
+      body:JSON.stringify({messages,model:'playground-demo',protect_recent:0,min_tokens_to_compress:100})
+    });
+    const ms=Math.round(performance.now()-t0);
+    const d=await resp.json();
+
+    const toolOut=d.messages.find(m=>m.role==='tool');
+    document.getElementById('pg-output').value=toolOut?toolOut.content:'(no tool output in response)';
+
+    document.getElementById('pg-before').textContent=fmt(d.tokens_before);
+    document.getElementById('pg-after').textContent=fmt(d.tokens_after);
+    document.getElementById('pg-saved').textContent=fmt(d.tokens_saved);
+    const pct=d.tokens_before>0?Math.round(d.tokens_saved/d.tokens_before*100):0;
+    document.getElementById('pg-pct').textContent=pct+'%';
+    document.getElementById('pg-results').style.display='grid';
+
+    renderPipeline(d.transforms_applied||[],d.tokens_before,d.tokens_after,d.tokens_saved);
+
+    document.getElementById('pg-status').textContent=`${ms}ms`;
+  }catch(e){
+    document.getElementById('pg-status').textContent='Error: '+e.message;
+  }finally{
+    btn.disabled=false;btn.textContent='Compress';
+  }
+}
 </script>
 </body>
 </html>
