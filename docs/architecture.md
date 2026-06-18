@@ -180,6 +180,33 @@ message array each time and infers age from position — this is what `compress(
 internally. The inference is correct but slightly less precise than explicit turn tracking.
 In practice, the `protect_recent` parameter handles this well enough.
 
+## Emergency Controls
+
+If compression causes issues during the pilot, admins have two options:
+
+**1. Kill switch — remove the plugin (30 seconds):**
+```bash
+oc edit configmap ipp-config -n openshift-ingress
+# Delete the headroom plugin block
+oc rollout restart deployment/payload-processing -n openshift-ingress
+```
+All compression stops immediately. Requests flow through MaaS normally.
+To re-enable, add the headroom block back and restart.
+
+**2. Automatic fail-open (already active):**
+The plugin is configured with `failOpen: true`. If the headroom service is down,
+slow (>10s timeout), or returns errors — requests pass through uncompressed
+automatically. No user impact, no admin action needed.
+
+**Monitoring:** The dashboard shows all requests. If a user consistently shows
+0% compression, they may be sending only small messages (below 500-token threshold)
+or only user/assistant messages (no tool outputs to compress). This is normal
+for short conversations.
+
+There is no per-request bypass mechanism — users cannot skip compression on
+individual requests. This is intentional: admins maintain full visibility of
+all traffic through the dashboard.
+
 ## Deployment
 
 ### Prerequisites
