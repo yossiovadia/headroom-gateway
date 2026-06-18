@@ -113,14 +113,14 @@ if oc get configmap headroom-build-hash -n "$NAMESPACE" &>/dev/null; then
 fi
 
 if [ "$FORCE_BUILD" = true ] || [ "$SOURCE_HASH" != "$LAST_HASH" ]; then
-  BUILD_ARGS=""
-  if [ -n "$HF_TOKEN" ]; then
-    BUILD_ARGS="--build-arg HF_TOKEN=$HF_TOKEN"
-  fi
-
   echo "  Source changed ($SOURCE_HASH != $LAST_HASH) — building..."
-  oc start-build headroom-service -n "$NAMESPACE" \
-    --from-dir="$REPO_DIR/service" $BUILD_ARGS --follow
+  if [ -n "$HF_TOKEN" ]; then
+    oc start-build headroom-service -n "$NAMESPACE" \
+      --from-dir="$REPO_DIR/service" --build-arg "HF_TOKEN=$HF_TOKEN" --follow
+  else
+    oc start-build headroom-service -n "$NAMESPACE" \
+      --from-dir="$REPO_DIR/service" --follow
+  fi
 
   oc create configmap headroom-build-hash --from-literal=hash="$SOURCE_HASH" \
     -n "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -

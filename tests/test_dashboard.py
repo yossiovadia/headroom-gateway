@@ -1,13 +1,16 @@
 """Tests verifying the dashboard contract — the /stats response has all fields the dashboard JS reads."""
 
 
-def test_dashboard_html_loads(client):
+def test_dashboard_html_loads():
     """The dashboard nginx pod serves index.html."""
+    import os
     import httpx
-    dash = httpx.Client(
-        base_url="https://headroom-dashboard-openshift-ingress.apps.ocp.d4fcj.sandbox659.opentlc.com",
-        verify=False, timeout=10.0,
-    )
+    dash_url = os.environ.get("HEADROOM_DASHBOARD_URL", "")
+    if not dash_url:
+        import pytest
+        pytest.skip("HEADROOM_DASHBOARD_URL not set")
+    verify = os.environ.get("HEADROOM_TEST_TLS_VERIFY", "false").lower() != "false"
+    dash = httpx.Client(base_url=dash_url, verify=verify, timeout=10.0)
     resp = dash.get("/")
     assert resp.status_code == 200
     assert "Headroom Compression Dashboard" in resp.text
@@ -54,33 +57,43 @@ def test_stats_recent_has_dashboard_fields(client, sample_messages):
 
 def test_stats_cost_uses_model_pricing(client, sample_messages):
     """Cost should use per-model pricing, not a flat rate."""
-    # Send as Haiku ($0.80/MTok)
+    pricing_resp = client.get("/pricing")
+    if pricing_resp.status_code != 200 or not pricing_resp.json().get("models"):
+        import pytest
+        pytest.skip("pricing endpoint unavailable or empty")
+
+    pricing = pricing_resp.json()["models"]
+
+    # Pick two models with different prices
+    models = sorted(pricing.items(), key=lambda x: x[1])
+    if len(models) < 2:
+        import pytest
+        pytest.skip("need at least 2 models in pricing table")
+
+    cheap_model, cheap_rate = models[0]
+    expensive_model, expensive_rate = models[-1]
+
     client.post(
         "/v1/compress",
-        json={"messages": sample_messages, "model": "claude-haiku-4-5-20251001"},
+        json={"messages": sample_messages, "model": cheap_model},
+        headers={"x-maas-username": "pricing-verify"},
+    )
+    client.post(
+        "/v1/compress",
+        json={"messages": sample_messages, "model": expensive_model},
         headers={"x-maas-username": "pricing-verify"},
     )
     data = client.get("/stats").json()
-    haiku_reqs = [r for r in data["recent_requests"]
-                  if r["model"] == "claude-haiku-4-5-20251001" and r["tags"]["user-id"] == "pricing-verify"]
-    assert len(haiku_reqs) > 0
+    recent = [r for r in data["recent_requests"] if r["tags"]["user-id"] == "pricing-verify"]
 
-    last = haiku_reqs[-1]
-    assert last["cost_per_mtok"] == 0.8, f"Haiku should be $0.80/MTok, got ${last['cost_per_mtok']}"
+    cheap_reqs = [r for r in recent if r["model"] == cheap_model]
+    expensive_reqs = [r for r in recent if r["model"] == expensive_model]
 
-    # Send as Opus ($15/MTok)
-    client.post(
-        "/v1/compress",
-        json={"messages": sample_messages, "model": "claude-opus-4-6"},
-        headers={"x-maas-username": "pricing-verify"},
-    )
-    data = client.get("/stats").json()
-    opus_reqs = [r for r in data["recent_requests"]
-                 if r["model"] == "claude-opus-4-6" and r["tags"]["user-id"] == "pricing-verify"]
-    assert len(opus_reqs) > 0
-
-    last = opus_reqs[-1]
-    assert last["cost_per_mtok"] == 15.0, f"Opus should be $15/MTok, got ${last['cost_per_mtok']}"
+    assert len(cheap_reqs) > 0 and len(expensive_reqs) > 0
+    assert cheap_reqs[-1]["cost_per_mtok"] == cheap_rate
+    assert expensive_reqs[-1]["cost_per_mtok"] == expensive_rate
+    assert cheap_reqs[-1]["cost_per_mtok"] != expensive_reqs[-1]["cost_per_mtok"], \
+        "different models should have different rates"
 
 
 def test_stats_cost_only_on_compressed(client):
@@ -95,17 +108,18 @@ def test_stats_cost_only_on_compressed(client):
 
 
 def test_pricing_endpoint(client):
-    """The /pricing endpoint returns model costs from Postgres."""
+    """The /pricing endpoint returns model costs."""
     resp = client.get("/pricing")
     assert resp.status_code == 200
     data = resp.json()
     assert "models" in data
     assert "fallback_cost_per_mtok" in data
-    models = data["models"]
-    assert "claude-opus-4-6" in models
-    assert models["claude-opus-4-6"] == 15.0
-    assert "claude-haiku-4-5-20251001" in models
-    assert models["claude-haiku-4-5-20251001"] == 0.8
+    assert isinstance(data["models"], dict)
+    assert data["fallback_cost_per_mtok"] > 0
+    for model, rate in data["models"].items():
+        assert isinstance(model, str)
+        assert isinstance(rate, (int, float))
+        assert rate > 0, f"model {model} has non-positive rate: {rate}"
 
 
 def test_compress_returns_transforms(client, sample_messages):

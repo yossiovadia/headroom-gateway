@@ -15,10 +15,7 @@ from pydantic import BaseModel
 from headroom import compress
 
 DB_PATH = os.environ.get("HEADROOM_STATS_DB", "/data/headroom-stats.db")
-PRICING_DSN = os.environ.get(
-    "HEADROOM_PRICING_DSN",
-    "postgresql://metering:metering-dev@metering-postgresql.openshift-ingress.svc:5432/metering",
-)
+PRICING_DSN = os.environ.get("HEADROOM_PRICING_DSN", "")
 FALLBACK_COST_PER_MTOK = float(os.environ.get("HEADROOM_COST_PER_MTOK", "15.0"))
 PRICING_REFRESH_SECONDS = 300
 
@@ -38,25 +35,30 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 _pricing: dict[str, float] = {}
+_pricing_aliases: dict[str, float] = {}
 _pricing_last_refresh: float = 0
 
 
 def _refresh_pricing() -> None:
-    global _pricing, _pricing_last_refresh
+    global _pricing, _pricing_aliases, _pricing_last_refresh
     if time.time() - _pricing_last_refresh < PRICING_REFRESH_SECONDS:
+        return
+    if not PRICING_DSN:
+        _pricing_last_refresh = time.time()
         return
     try:
         import psycopg2
-        conn = psycopg2.connect(PRICING_DSN)
+        conn = psycopg2.connect(PRICING_DSN, connect_timeout=5)
         cur = conn.cursor()
         cur.execute("SELECT model, input_cost_per_mtok FROM model_pricing")
         _pricing = {row[0]: float(row[1]) for row in cur.fetchall()}
         cur.close()
         conn.close()
+        _pricing_aliases = {}
         _pricing_last_refresh = time.time()
         logger.info("refreshed model pricing: %d models", len(_pricing))
     except Exception as e:
-        logger.warning("failed to refresh pricing from postgres: %s", e)
+        logger.warning("failed to refresh pricing: %s", type(e).__name__)
         if not _pricing:
             _pricing_last_refresh = 0
 
@@ -65,9 +67,13 @@ def _cost_per_mtok(model: str) -> float:
     _refresh_pricing()
     if model in _pricing:
         return _pricing[model]
+    if model in _pricing_aliases:
+        return _pricing_aliases[model]
     for key, val in _pricing.items():
         if key in model or model in key:
+            _pricing_aliases[model] = val
             return val
+    _pricing_aliases[model] = FALLBACK_COST_PER_MTOK
     return FALLBACK_COST_PER_MTOK
 
 
@@ -95,6 +101,7 @@ def _init_db(path: str) -> None:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_user ON requests(user_id)")
+    conn.execute("PRAGMA journal_mode=WAL")
     # migrate: add cost columns if missing (existing DBs)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(requests)").fetchall()}
     if "cost_saved_usd" not in cols:
@@ -355,8 +362,9 @@ def readyz():
             conn.execute("SELECT 1").fetchone()
         return {"status": "ready", "db": DB_PATH, "uptime_seconds": round(time.time() - _startup_time)}
     except Exception as e:
+        logger.error("readyz check failed: %s", e)
         return Response(
-            content=f'{{"status":"not_ready","error":"{e}"}}',
+            content='{"status":"not_ready","error":"database unavailable"}',
             status_code=503,
             media_type="application/json",
         )

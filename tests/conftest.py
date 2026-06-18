@@ -8,10 +8,9 @@ import httpx
 def pytest_addoption(parser):
     parser.addoption("--run-slow", action="store_true", default=False, help="run slow tests")
 
-HEADROOM_URL = os.environ.get(
-    "HEADROOM_TEST_URL",
-    "https://headroom-service-openshift-ingress.apps.ocp.d4fcj.sandbox659.opentlc.com",
-)
+HEADROOM_URL = os.environ.get("HEADROOM_TEST_URL", "")
+if not HEADROOM_URL:
+    pytest.exit("HEADROOM_TEST_URL env var required — set to the headroom service URL", returncode=1)
 
 
 @pytest.fixture(scope="session")
@@ -21,7 +20,8 @@ def headroom_url():
 
 @pytest.fixture(scope="session")
 def client():
-    return httpx.Client(base_url=HEADROOM_URL, verify=False, timeout=30.0)
+    verify = os.environ.get("HEADROOM_TEST_TLS_VERIFY", "false").lower() != "false"
+    return httpx.Client(base_url=HEADROOM_URL, verify=verify, timeout=30.0)
 
 
 @pytest.fixture

@@ -17,8 +17,7 @@ import pytest
 
 def _oc(cmd: str, timeout: int = 120) -> str:
     result = subprocess.run(
-        f"oc {cmd}",
-        shell=True,
+        ["oc"] + cmd.split(),
         capture_output=True,
         text=True,
         timeout=timeout,
