@@ -6,19 +6,23 @@
 #   - payload-processing image already deployed with headroom plugin registered
 #
 # Usage:
-#   ./scripts/deploy-option-e.sh                    # deploy to openshift-ingress (CPU)
-#   ./scripts/deploy-option-e.sh -n my-namespace    # deploy to specific namespace
-#   ./scripts/deploy-option-e.sh --gpu              # deploy with GPU support
+#   ./scripts/deploy-option-e.sh                                    # deploy to openshift-ingress (CPU)
+#   ./scripts/deploy-option-e.sh -n my-namespace                    # deploy to specific namespace
+#   ./scripts/deploy-option-e.sh --gpu                              # deploy with GPU support
+#   ./scripts/deploy-option-e.sh --hf-token hf_xxx                  # faster model download
+#   HF_TOKEN=hf_xxx ./scripts/deploy-option-e.sh --gpu              # env var also works
 
 set -euo pipefail
 
 NAMESPACE="openshift-ingress"
 GPU=false
+HF_TOKEN="${HF_TOKEN:-}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     -n) NAMESPACE="$2"; shift 2 ;;
     --gpu) GPU=true; shift ;;
+    --hf-token) HF_TOKEN="$2"; shift 2 ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -40,6 +44,9 @@ oc new-build --binary --strategy=docker --name=headroom-service -n "$NAMESPACE" 
 BUILD_ARGS=""
 if [ "$GPU" = true ]; then
   BUILD_ARGS="--build-arg RUNTIME=gpu"
+fi
+if [ -n "$HF_TOKEN" ]; then
+  BUILD_ARGS="$BUILD_ARGS --build-arg HF_TOKEN=$HF_TOKEN"
 fi
 
 oc start-build headroom-service -n "$NAMESPACE" \
