@@ -181,13 +181,15 @@ spec:
           value: "1"
         - name: HEADROOM_STALE_READ_COMPRESS_AFTER_TURNS
           value: "1"
+        - name: HEADROOM_WORKERS
+          value: "4"
         resources:
           requests:
-            cpu: "2"
-            memory: 2Gi
-          limits:
             cpu: "4"
             memory: 4Gi
+          limits:
+            cpu: "8"
+            memory: 8Gi
         livenessProbe:
           httpGet:
             path: /health

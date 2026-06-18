@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-RUN pip install --no-cache-dir "headroom-ai[ml]" fastapi uvicorn psycopg2-binary onnxruntime-gpu
+RUN pip install --no-cache-dir "headroom-ai[ml]" fastapi uvicorn gunicorn psycopg2-binary onnxruntime-gpu
 
 ENV HF_HOME=/opt/huggingface
 ENV HOME=/opt/app
@@ -19,4 +19,5 @@ snapshot_download('answerdotai/ModernBERT-base', token=token)" && \
 COPY headroom_service.py /app/headroom_service.py
 WORKDIR /app
 EXPOSE 8787
-CMD ["python", "headroom_service.py"]
+ENV HEADROOM_WORKERS=4
+CMD ["sh", "-c", "gunicorn headroom_service:app --bind 0.0.0.0:8787 --workers ${HEADROOM_WORKERS} --worker-class uvicorn.workers.UvicornWorker --preload --timeout 120"]

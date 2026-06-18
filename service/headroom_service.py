@@ -464,6 +464,7 @@ def metrics():
     return Response(content="\n".join(lines) + "\n", media_type="text/plain; charset=utf-8")
 
 
+_refresh_pricing()
+
 if __name__ == "__main__":
-    _refresh_pricing()
     uvicorn.run(app, host="0.0.0.0", port=8787)
