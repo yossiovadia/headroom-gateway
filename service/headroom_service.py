@@ -3,7 +3,7 @@ import time
 import sqlite3
 import threading
 import logging
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from headroom import compress
+from headroom.cache.compression_cache import CompressionCache
 
 DB_PATH = os.environ.get("HEADROOM_STATS_DB", "/data/headroom-stats.db")
 PRICING_DSN = os.environ.get("HEADROOM_PRICING_DSN", "")
@@ -132,6 +133,33 @@ _init_db(DB_PATH)
 _recent: deque = deque(maxlen=100)
 _startup_time = time.time()
 
+# Per-user compression cache — avoids re-compressing content seen in earlier requests
+MAX_USER_SESSIONS = int(os.environ.get("HEADROOM_MAX_USER_SESSIONS", "200"))
+MAX_CACHE_ENTRIES = int(os.environ.get("HEADROOM_MAX_CACHE_ENTRIES", "5000"))
+SESSION_TTL_SECONDS = int(os.environ.get("HEADROOM_SESSION_TTL", "7200"))
+_user_caches: OrderedDict[str, tuple[CompressionCache, float]] = OrderedDict()
+_user_cache_lock = threading.Lock()
+
+
+def _get_user_cache(user_id: str) -> CompressionCache:
+    now = time.time()
+    with _user_cache_lock:
+        if user_id in _user_caches:
+            cache, _ = _user_caches[user_id]
+            _user_caches[user_id] = (cache, now)
+            _user_caches.move_to_end(user_id)
+            return cache
+        cache = CompressionCache(max_entries=MAX_CACHE_ENTRIES)
+        _user_caches[user_id] = (cache, now)
+        # Evict oldest sessions if over limit
+        while len(_user_caches) > MAX_USER_SESSIONS:
+            _user_caches.popitem(last=False)
+        # Evict expired sessions
+        expired = [k for k, (_, ts) in _user_caches.items() if now - ts > SESSION_TTL_SECONDS]
+        for k in expired:
+            del _user_caches[k]
+        return cache
+
 
 def _load_recent_from_db() -> None:
     with _db() as conn:
@@ -178,7 +206,11 @@ def compress_messages(req: CompressRequest, request: Request):
             kwargs["protect_recent"] = req.protect_recent
         if req.min_tokens_to_compress is not None:
             kwargs["min_tokens_to_compress"] = req.min_tokens_to_compress
-        result = compress(messages=req.messages, model=req.model, **kwargs)
+
+        cache = _get_user_cache(user_id)
+        working_messages = cache.apply_cached(req.messages)
+        result = compress(messages=working_messages, model=req.model, **kwargs)
+        cache.update_from_result(req.messages, result.messages)
     except Exception as e:
         _prom_errors += 1
         return {"messages": req.messages, "tokens_before": 0, "tokens_after": 0,
@@ -353,6 +385,29 @@ def get_stats_history():
 def get_pricing():
     _refresh_pricing()
     return {"models": _pricing, "fallback_cost_per_mtok": FALLBACK_COST_PER_MTOK}
+
+
+@app.get("/sessions")
+def get_sessions():
+    with _user_cache_lock:
+        now = time.time()
+        sessions = []
+        for uid, (cache, last_seen) in _user_caches.items():
+            stats = cache.get_stats() if hasattr(cache, 'get_stats') else {}
+            sessions.append({
+                "user_id": uid,
+                "last_active_seconds_ago": round(now - last_seen),
+                "cache_entries": stats.get("entry_count", len(cache._cache) if hasattr(cache, '_cache') else 0),
+                "cache_hits": cache._hits if hasattr(cache, '_hits') else 0,
+                "cache_misses": cache._misses if hasattr(cache, '_misses') else 0,
+                "tokens_saved_from_cache": cache._total_tokens_saved if hasattr(cache, '_total_tokens_saved') else 0,
+            })
+        return {
+            "active_sessions": len(sessions),
+            "max_sessions": MAX_USER_SESSIONS,
+            "session_ttl_seconds": SESSION_TTL_SECONDS,
+            "sessions": sessions,
+        }
 
 
 @app.get("/readyz")

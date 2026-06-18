@@ -383,22 +383,21 @@ Without it, compressed text varies slightly each time → cache miss every reque
 
 ## Comparison Matrix
 
-| Aspect | A: Before MaaS | B: After MaaS | C: Standalone | D: BBR Sidecar | E: Custom Service | **E-Proxy (Recommended)** |
-|--------|----------------|---------------|---------------|----------------|-------------------|---------------------------|
-| **Compression** | YES | YES | YES | YES (53%) | YES (full pipeline) | **YES (full pipeline)** |
-| **CacheAligner** | YES | YES | YES | **NO** | YES | **YES** |
-| **Session tracking** | YES | YES | YES | NO | via compress() | **YES (native)** |
-| **CCR (retrieve originals)** | YES | YES | YES | NO | NO | **YES** |
-| **Built-in dashboard** | YES | N/A | YES | NO | Custom HTML | **YES (`/dashboard`)** |
-| **Prometheus metrics** | YES | N/A | YES | NO | NO | **YES (`/metrics`)** |
-| **Auth/key mgmt** | MaaS | MaaS | Manual | MaaS | MaaS | **MaaS** |
-| **Per-user tracking** | Needs header | Native | Needs header | Native | Custom code | **Native** |
-| **Routing complexity** | Low | HIGH | None | None | None | **None** |
-| **User changes** | New URL | New path | New URL + key | None | None | **None** |
-| **Custom code to maintain** | None | None | None | Go + Python | Go + 120 lines Python | **Go plugin only** |
-| **Resource per pod** | None | None | None | 4Gi + 4CPU each | Shared pool | **Shared pool** |
-| **GPU sharing** | Own pool | N/A | Own pool | Per-pod | Shared pool | **Shared pool** |
-| **Upgrade path** | Rebuild image | Rebuild image | Rebuild image | Code change + rebuild | Code change + rebuild | **Rebuild image only** |
+| Aspect | A: Before MaaS | B: After MaaS | C: Standalone | D: BBR Sidecar | **E: Enhanced Service (Deployed)** |
+|--------|----------------|---------------|---------------|----------------|--------------------------------------|
+| **Compression** | YES | YES | YES | YES (53%) | **YES (full pipeline)** |
+| **CacheAligner** | YES | YES | YES | NO | **YES** |
+| **Per-user session cache** | YES (proxy) | YES | YES | NO | **YES (CompressionCache per user)** |
+| **CCR (retrieve originals)** | YES | YES | YES | NO | NO (architecture limitation) |
+| **Dashboard + Playground** | YES | N/A | YES | NO | **YES (custom + embedded in MaaS)** |
+| **Prometheus metrics** | YES | N/A | YES | NO | **YES (`/metrics`)** |
+| **Per-model pricing** | NO | NO | NO | NO | **YES (from metering Postgres)** |
+| **Auth/key mgmt** | MaaS | MaaS | Manual | MaaS | **MaaS** |
+| **Per-user tracking** | Needs header | Native | Needs header | Native | **YES (x-maas-username)** |
+| **Stats persistence** | In-memory | N/A | In-memory | NO | **SQLite on PVC** |
+| **Routing complexity** | Low | HIGH | None | None | **None** |
+| **User changes** | New URL | New path | New URL + key | None | **None** |
+| **GPU sharing** | Own pool | N/A | Own pool | Per-pod | **Shared pool (auto-detect)** |
 
 ### Option E-Proxy: Headroom Proxy as Shared Compression Service (Recommended)
 
@@ -540,39 +539,42 @@ are ignored by the Go plugin. **No Go changes needed.**
 
 ## Recommendation
 
-**Option E-Proxy** is the recommended architecture.
+**Option E (Enhanced Custom Service)** is the deployed and recommended architecture.
 
-This is Option E (shared headroom compression service called by BBR plugin) but using
-the headroom proxy itself instead of a custom Python wrapper. The proxy ships everything
-we'd otherwise have to build and maintain: stats, dashboard, metrics, CCR, session
-tracking, health checks, cost tracking.
+We evaluated using the headroom proxy directly (E-Proxy) but found that its `/v1/compress`
+endpoint doesn't feed into the proxy's stats pipeline — it only tracks proxied LLM requests.
+Since our architecture uses `/v1/compress` as a utility API called by the BBR plugin (not
+as a transparent proxy), we need our own stats, persistence, and session tracking.
 
-**Why E-Proxy wins:**
-- Full headroom pipeline including CacheAligner (10x cache savings), session tracking, CCR
-- Shared GPU pool scales efficiently (3-5 replicas serve 50+ users)
+**Why Enhanced E wins:**
+- Full headroom compression pipeline (SmartCrusher, Kompress ML, CacheAligner) via `compress()`
+- **Per-user session cache** — `CompressionCache` per user avoids re-compressing content seen
+  in earlier requests. Same cross-request optimization as the local headroom proxy.
+- **Per-model pricing** — real costs from metering Postgres, not hardcoded estimates
+- **SQLite persistence** — stats survive pod restarts, stored on PVC
+- **Prometheus metrics** + dashboard with playground for demos
+- Shared GPU pool (auto-detect via `onnxruntime-gpu`)
 - Zero user changes — same MaaS URL, same key
-- Zero custom service code — just deploy `headroom proxy`
-- Built-in observability: `/stats`, `/metrics`, `/dashboard`
-- MaaS handles auth, metering, per-user tracking — no new user-facing services
-- Same Go plugin contract as original Option E — `POST /v1/compress`
-- Upgrades to headroom get picked up by rebuilding the image — no code changes
+- 35 tests including security audit, persistence, all compression engines
 
-**Option A (Headroom Before MaaS)** is still a valid standalone architecture for
-deployments without MaaS — users point directly at headroom which forwards to the provider.
+**Known limitation: no CCR.** In our architecture, the LLM talks to the provider, not
+to the headroom service. The LLM cannot call `headroom_retrieve` to get compressed
+originals back. This would require either MCP integration (headroom as an MCP server
+alongside the BBR flow) or switching to full proxy mode (Option A/C). For coding agent
+use cases, this is acceptable — headroom's compression is lossy-safe and the LLM can
+re-read files if needed.
 
-**Option D (BBR Sidecar)** is a proven fallback but misses CacheAligner and session
-tracking, duplicates resources per pod, and requires custom `/v1/compress-raw` endpoint.
+**Multi-user scaling:**
+Each user gets their own `CompressionCache` instance (bounded, LRU-evicted, TTL-based).
+When user A sends request #5, tool content that was compressed in their earlier requests
+is served from cache — no re-compression. This closes the main gap between centralized
+deployment and per-user local proxy.
 
-**Option B (After MaaS)** is not recommended — Envoy routing complexity and request
-mutation before headroom interfere with compression.
-
-### Suggested plan:
-1. Build headroom proxy image with pre-downloaded models (Dockerfile only, no custom code)
-2. Deploy as StatefulSet on sandbox659 with PVC for stats persistence
-3. Point existing Go plugin at the new service (same `/v1/compress` contract)
-4. Verify built-in `/stats` and `/dashboard` work with the existing compression dashboard
-5. Pilot with 5-10 users (Claude Code + Codex) — monitor built-in dashboards
-6. Add GPU support (`onnxruntime-gpu`) for production latency
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `HEADROOM_MAX_USER_SESSIONS` | 200 | Max concurrent user sessions in memory |
+| `HEADROOM_MAX_CACHE_ENTRIES` | 5000 | Max cached compressions per user |
+| `HEADROOM_SESSION_TTL` | 7200 (2h) | Idle session eviction time |
 
 ## Compression Stack: Kompress ML + Smart_Crusher
 
