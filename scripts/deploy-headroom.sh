@@ -1,5 +1,7 @@
 #!/bin/bash
-# deploy-option-e.sh — Deploy headroom compression service (Option E-Proxy)
+# deploy-headroom.sh — Deploy headroom compression service to OpenShift
+#
+# Idempotent — safe to run multiple times. Skips image build if source unchanged.
 #
 # Prerequisites:
 #   - oc logged into the target cluster (oc login ...)
@@ -14,10 +16,11 @@
 # It does NOT touch MaaS, BBR, metering, or Envoy configuration.
 #
 # Usage:
-#   ./scripts/deploy-option-e.sh                                    # deploy to openshift-ingress
-#   ./scripts/deploy-option-e.sh -n my-namespace                    # deploy to specific namespace
-#   ./scripts/deploy-option-e.sh --hf-token hf_xxx                  # faster model download
-#   HF_TOKEN=hf_xxx ./scripts/deploy-option-e.sh                    # env var also works
+#   ./scripts/deploy-headroom.sh                                    # deploy to openshift-ingress
+#   ./scripts/deploy-headroom.sh -n my-namespace                    # deploy to specific namespace
+#   ./scripts/deploy-headroom.sh --hf-token hf_xxx                  # faster model download
+#   ./scripts/deploy-headroom.sh --force-build                      # rebuild even if source unchanged
+#   HF_TOKEN=hf_xxx ./scripts/deploy-headroom.sh                    # env var also works
 #
 # GPU support is automatic — onnxruntime-gpu detects NVIDIA GPUs at runtime.
 # No flag needed. If a GPU is available, it uses it. Otherwise falls back to CPU.
@@ -26,11 +29,13 @@ set -euo pipefail
 
 NAMESPACE="openshift-ingress"
 HF_TOKEN="${HF_TOKEN:-}"
+FORCE_BUILD=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     -n) NAMESPACE="$2"; shift 2 ;;
     --hf-token) HF_TOKEN="$2"; shift 2 ;;
+    --force-build) FORCE_BUILD=true; shift ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -40,7 +45,6 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
 # --- Preflight checks ---
 echo "=== Preflight checks ==="
-FAIL=false
 
 if ! command -v oc &>/dev/null; then
   echo "FAIL: oc CLI not found. Install: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/"
@@ -82,20 +86,12 @@ else
   echo "  WARN: metering-postgresql not found — cost tracking will use flat \$${HEADROOM_COST_PER_MTOK:-15}/MTok fallback"
 fi
 
-if [ ! -f "$REPO_DIR/service/Dockerfile" ]; then
-  echo "FAIL: service/Dockerfile not found at $REPO_DIR/service/"
-  exit 1
-fi
-
-if [ ! -f "$REPO_DIR/service/headroom_service.py" ]; then
-  echo "FAIL: service/headroom_service.py not found at $REPO_DIR/service/"
-  exit 1
-fi
-
-if [ ! -f "$REPO_DIR/dashboard/index.html" ]; then
-  echo "FAIL: dashboard/index.html not found at $REPO_DIR/dashboard/"
-  exit 1
-fi
+for f in service/Dockerfile service/headroom_service.py dashboard/index.html; do
+  if [ ! -f "$REPO_DIR/$f" ]; then
+    echo "FAIL: $f not found at $REPO_DIR/$f"
+    exit 1
+  fi
+done
 echo "  source files: found"
 echo ""
 
@@ -106,20 +102,34 @@ echo "  GPU:       auto-detect (onnxruntime-gpu)"
 echo "============================================"
 echo ""
 
-# Step 1: Build headroom service image
+# Step 1: Build headroom service image (skip if source unchanged)
 echo "=== Step 1: Build headroom-service image ==="
 oc new-build --binary --strategy=docker --name=headroom-service -n "$NAMESPACE" 2>/dev/null || true
 
-BUILD_ARGS=""
-if [ -n "$HF_TOKEN" ]; then
-  BUILD_ARGS="--build-arg HF_TOKEN=$HF_TOKEN"
+SOURCE_HASH=$(cat "$REPO_DIR/service/Dockerfile" "$REPO_DIR/service/headroom_service.py" | shasum -a 256 | cut -c1-12)
+LAST_HASH=""
+if oc get configmap headroom-build-hash -n "$NAMESPACE" &>/dev/null; then
+  LAST_HASH=$(oc get configmap headroom-build-hash -n "$NAMESPACE" -o jsonpath='{.data.hash}' 2>/dev/null || echo "")
 fi
 
-oc start-build headroom-service -n "$NAMESPACE" \
-  --from-dir="$REPO_DIR/service" $BUILD_ARGS --follow
+if [ "$FORCE_BUILD" = true ] || [ "$SOURCE_HASH" != "$LAST_HASH" ]; then
+  BUILD_ARGS=""
+  if [ -n "$HF_TOKEN" ]; then
+    BUILD_ARGS="--build-arg HF_TOKEN=$HF_TOKEN"
+  fi
+
+  echo "  Source changed ($SOURCE_HASH != $LAST_HASH) — building..."
+  oc start-build headroom-service -n "$NAMESPACE" \
+    --from-dir="$REPO_DIR/service" $BUILD_ARGS --follow
+
+  oc create configmap headroom-build-hash --from-literal=hash="$SOURCE_HASH" \
+    -n "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
+else
+  echo "  Source unchanged ($SOURCE_HASH) — skipping build"
+fi
 echo ""
 
-# Step 2: Create PVC for stats persistence
+# Step 2: Create PVC for stats persistence (idempotent — oc apply)
 echo "=== Step 2: Create stats PVC ==="
 oc apply -n "$NAMESPACE" -f - <<EOF
 apiVersion: v1
@@ -135,9 +145,8 @@ spec:
 EOF
 echo ""
 
-# Step 3: Deploy headroom service
+# Step 3: Deploy headroom service (idempotent — oc apply)
 echo "=== Step 3: Deploy headroom-service ==="
-
 oc apply -n "$NAMESPACE" -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -225,7 +234,7 @@ spec:
 EOF
 echo ""
 
-# Step 4: Deploy dashboard
+# Step 4: Deploy dashboard (idempotent — oc apply + dry-run)
 echo "=== Step 4: Deploy headroom dashboard ==="
 oc create configmap headroom-dashboard \
   --from-file=index.html="$REPO_DIR/dashboard/index.html" \
@@ -289,8 +298,11 @@ spec:
 EOF
 echo ""
 
-# Step 5: Wait for rollouts
+# Step 5: Rollout (only if build happened or deployment changed)
 echo "=== Step 5: Wait for rollouts ==="
+if [ "$SOURCE_HASH" != "$LAST_HASH" ] || [ "$FORCE_BUILD" = true ]; then
+  oc rollout restart deployment/headroom-service -n "$NAMESPACE"
+fi
 oc rollout status deployment/headroom-service -n "$NAMESPACE" --timeout=180s
 oc rollout status deployment/headroom-dashboard -n "$NAMESPACE" --timeout=60s
 echo ""
@@ -322,7 +334,7 @@ echo ""
 echo "  Headroom service: https://$SVC_HOST"
 echo "  Dashboard:        https://$DASH_HOST/?url=https://$SVC_HOST"
 echo "  Metrics:          https://$SVC_HOST/metrics"
-echo "  Proxy stats:      https://$SVC_HOST/stats"
+echo "  Stats:            https://$SVC_HOST/stats"
 echo ""
 echo "  Next: add headroom plugin to ipp-config ConfigMap:"
 echo "    - name: headroom"
