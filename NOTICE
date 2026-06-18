@@ -1,0 +1,40 @@
+Headroom Gateway
+Copyright 2026 Red Hat, Inc.
+
+This product uses the following third-party software:
+
+headroom-ai
+------------
+Copyright 2025 Headroom Contributors
+Licensed under the Apache License 2.0
+https://github.com/chopratejas/headroom
+
+onnxruntime
+-----------
+Copyright (c) Microsoft Corporation
+Licensed under the MIT License
+https://github.com/microsoft/onnxruntime
+
+FastAPI
+-------
+Copyright (c) 2018 Sebastián Ramírez
+Licensed under the MIT License
+https://github.com/tiangolo/fastapi
+
+uvicorn
+-------
+Copyright (c) 2017-present, Encode OSS Ltd.
+Licensed under the BSD 3-Clause License
+https://github.com/encode/uvicorn
+
+psycopg2
+---------
+Copyright (c) 2001-2021 Federico Di Gregorio, Daniele Varrazzo
+Licensed under the GNU LGPL v3
+https://github.com/psycopg/psycopg2
+
+Chart.js (dashboard)
+--------------------
+Copyright (c) 2014-2024 Chart.js Contributors
+Licensed under the MIT License
+https://github.com/chartjs/Chart.js
