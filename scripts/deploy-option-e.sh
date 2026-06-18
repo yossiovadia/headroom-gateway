@@ -2,26 +2,34 @@
 # deploy-option-e.sh — Deploy headroom compression service (Option E-Proxy)
 #
 # Prerequisites:
-#   - oc logged into the target cluster
-#   - payload-processing image already deployed with headroom plugin registered
+#   - oc logged into the target cluster (oc login ...)
+#   - MaaS gateway deployed (Envoy + Istio + Kuadrant)
+#   - payload-processing (BBR/IPP) deployed with headroom plugin registered
+#     (from yossiovadia/ai-gateway-payload-processing branch feat/headroom-on-metering)
+#   - metering-service deployed with model_pricing table in Postgres
+#     (for per-model cost tracking — falls back to $15/MTok if unavailable)
+#   - ipp-config ConfigMap exists (headroom plugin entry added after deployment)
+#
+# This script deploys ONLY the headroom compression service and dashboard.
+# It does NOT touch MaaS, BBR, metering, or Envoy configuration.
 #
 # Usage:
-#   ./scripts/deploy-option-e.sh                                    # deploy to openshift-ingress (CPU)
+#   ./scripts/deploy-option-e.sh                                    # deploy to openshift-ingress
 #   ./scripts/deploy-option-e.sh -n my-namespace                    # deploy to specific namespace
-#   ./scripts/deploy-option-e.sh --gpu                              # deploy with GPU support
 #   ./scripts/deploy-option-e.sh --hf-token hf_xxx                  # faster model download
-#   HF_TOKEN=hf_xxx ./scripts/deploy-option-e.sh --gpu              # env var also works
+#   HF_TOKEN=hf_xxx ./scripts/deploy-option-e.sh                    # env var also works
+#
+# GPU support is automatic — onnxruntime-gpu detects NVIDIA GPUs at runtime.
+# No flag needed. If a GPU is available, it uses it. Otherwise falls back to CPU.
 
 set -euo pipefail
 
 NAMESPACE="openshift-ingress"
-GPU=false
 HF_TOKEN="${HF_TOKEN:-}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     -n) NAMESPACE="$2"; shift 2 ;;
-    --gpu) GPU=true; shift ;;
     --hf-token) HF_TOKEN="$2"; shift 2 ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
@@ -33,7 +41,7 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 echo "============================================"
 echo "  Headroom Compression Service Deployment"
 echo "  Namespace: $NAMESPACE"
-echo "  GPU:       $GPU"
+echo "  GPU:       auto-detect (onnxruntime-gpu)"
 echo "============================================"
 echo ""
 
@@ -42,11 +50,8 @@ echo "=== Step 1: Build headroom-service image ==="
 oc new-build --binary --strategy=docker --name=headroom-service -n "$NAMESPACE" 2>/dev/null || true
 
 BUILD_ARGS=""
-if [ "$GPU" = true ]; then
-  BUILD_ARGS="--build-arg RUNTIME=gpu"
-fi
 if [ -n "$HF_TOKEN" ]; then
-  BUILD_ARGS="$BUILD_ARGS --build-arg HF_TOKEN=$HF_TOKEN"
+  BUILD_ARGS="--build-arg HF_TOKEN=$HF_TOKEN"
 fi
 
 oc start-build headroom-service -n "$NAMESPACE" \
@@ -71,20 +76,6 @@ echo ""
 
 # Step 3: Deploy headroom service
 echo "=== Step 3: Deploy headroom-service ==="
-
-GPU_RESOURCES=""
-if [ "$GPU" = true ]; then
-  GPU_RESOURCES='
-          limits:
-            cpu: "2"
-            memory: 4Gi
-            nvidia.com/gpu: "1"'
-else
-  GPU_RESOURCES='
-          limits:
-            cpu: "4"
-            memory: 4Gi'
-fi
 
 oc apply -n "$NAMESPACE" -f - <<EOF
 apiVersion: apps/v1
@@ -123,7 +114,10 @@ spec:
         resources:
           requests:
             cpu: "2"
-            memory: 2Gi${GPU_RESOURCES}
+            memory: 2Gi
+          limits:
+            cpu: "4"
+            memory: 4Gi
         livenessProbe:
           httpGet:
             path: /health

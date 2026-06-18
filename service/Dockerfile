@@ -1,13 +1,6 @@
 FROM python:3.12-slim
 
-ARG RUNTIME=cpu
-
-RUN pip install --no-cache-dir "headroom-ai[ml]" fastapi uvicorn psycopg2-binary && \
-    if [ "$RUNTIME" = "gpu" ]; then \
-      pip install --no-cache-dir onnxruntime-gpu; \
-    else \
-      pip install --no-cache-dir onnxruntime; \
-    fi
+RUN pip install --no-cache-dir "headroom-ai[ml]" fastapi uvicorn psycopg2-binary onnxruntime-gpu
 
 ENV HF_HOME=/opt/huggingface
 ENV HOME=/opt/app
