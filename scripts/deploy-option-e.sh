@@ -38,6 +38,67 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
+# --- Preflight checks ---
+echo "=== Preflight checks ==="
+FAIL=false
+
+if ! command -v oc &>/dev/null; then
+  echo "FAIL: oc CLI not found. Install: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/"
+  exit 1
+fi
+
+if ! oc whoami &>/dev/null; then
+  echo "FAIL: not logged into OpenShift. Run: oc login --server=<cluster-url>"
+  exit 1
+fi
+echo "  oc logged in as: $(oc whoami)"
+
+if ! oc get namespace "$NAMESPACE" &>/dev/null; then
+  echo "FAIL: namespace '$NAMESPACE' does not exist"
+  exit 1
+fi
+echo "  namespace: $NAMESPACE"
+
+if ! oc get deployment payload-processing -n "$NAMESPACE" &>/dev/null; then
+  echo "FAIL: payload-processing deployment not found in $NAMESPACE"
+  echo "  The BBR/IPP must be deployed first with the headroom plugin registered."
+  exit 1
+fi
+echo "  payload-processing: found"
+
+if oc get configmap ipp-config -n "$NAMESPACE" &>/dev/null; then
+  if oc get configmap ipp-config -n "$NAMESPACE" -o jsonpath='{.data}' | grep -q headroom; then
+    echo "  ipp-config: headroom plugin registered"
+  else
+    echo "  WARN: ipp-config exists but headroom plugin not registered yet (will need manual step after deploy)"
+  fi
+else
+  echo "  WARN: ipp-config configmap not found (will need manual step after deploy)"
+fi
+
+if oc get statefulset metering-postgresql -n "$NAMESPACE" &>/dev/null; then
+  echo "  metering-postgresql: found (per-model pricing available)"
+else
+  echo "  WARN: metering-postgresql not found — cost tracking will use flat \$${HEADROOM_COST_PER_MTOK:-15}/MTok fallback"
+fi
+
+if [ ! -f "$REPO_DIR/service/Dockerfile" ]; then
+  echo "FAIL: service/Dockerfile not found at $REPO_DIR/service/"
+  exit 1
+fi
+
+if [ ! -f "$REPO_DIR/service/headroom_service.py" ]; then
+  echo "FAIL: service/headroom_service.py not found at $REPO_DIR/service/"
+  exit 1
+fi
+
+if [ ! -f "$REPO_DIR/dashboard/index.html" ]; then
+  echo "FAIL: dashboard/index.html not found at $REPO_DIR/dashboard/"
+  exit 1
+fi
+echo "  source files: found"
+echo ""
+
 echo "============================================"
 echo "  Headroom Compression Service Deployment"
 echo "  Namespace: $NAMESPACE"
