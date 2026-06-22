@@ -80,8 +80,14 @@ else
   echo "  WARN: ipp-config configmap not found (will need manual step after deploy)"
 fi
 
+PG_PASSWORD=""
 if oc get statefulset metering-postgresql -n "$NAMESPACE" &>/dev/null; then
-  echo "  metering-postgresql: found (per-model pricing available)"
+  PG_PASSWORD=$(oc exec metering-postgresql-0 -n "$NAMESPACE" -- printenv POSTGRESQL_PASSWORD 2>/dev/null || echo "")
+  if [ -n "$PG_PASSWORD" ]; then
+    echo "  metering-postgresql: found (per-model pricing available)"
+  else
+    echo "  WARN: metering-postgresql found but couldn't read password — pricing will use fallback"
+  fi
 else
   echo "  WARN: metering-postgresql not found — cost tracking will use flat \$${HEADROOM_COST_PER_MTOK:-15}/MTok fallback"
 fi
@@ -173,8 +179,14 @@ spec:
         env:
         - name: HEADROOM_STATS_DB
           value: /data/headroom-stats.db
-        - name: HEADROOM_PRICING_DSN
-          value: "postgresql://metering:metering-dev@metering-postgresql.$NAMESPACE.svc:5432/metering"
+        - name: HEADROOM_PRICING_PG_HOST
+          value: "metering-postgresql.$NAMESPACE.svc"
+        - name: HEADROOM_PRICING_PG_DB
+          value: "metering"
+        - name: HEADROOM_PRICING_PG_USER
+          value: "metering"
+        - name: HEADROOM_PRICING_PG_PASSWORD
+          value: "$PG_PASSWORD"
         - name: HEADROOM_COST_PER_MTOK
           value: "15.0"
         - name: HEADROOM_COMPRESSION_STABLE_AFTER_TURN

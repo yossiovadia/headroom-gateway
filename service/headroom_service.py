@@ -16,9 +16,25 @@ from headroom import compress
 from headroom.cache.compression_cache import CompressionCache
 
 DB_PATH = os.environ.get("HEADROOM_STATS_DB", "/data/headroom-stats.db")
-PRICING_DSN = os.environ.get("HEADROOM_PRICING_DSN", "")
 FALLBACK_COST_PER_MTOK = float(os.environ.get("HEADROOM_COST_PER_MTOK", "15.0"))
 PRICING_REFRESH_SECONDS = 300
+
+
+def _build_pricing_dsn() -> str:
+    if os.environ.get("HEADROOM_PRICING_DSN"):
+        return os.environ["HEADROOM_PRICING_DSN"]
+    host = os.environ.get("HEADROOM_PRICING_PG_HOST", "")
+    if not host:
+        return ""
+    db = os.environ.get("HEADROOM_PRICING_PG_DB", "metering")
+    user = os.environ.get("HEADROOM_PRICING_PG_USER", "metering")
+    password = os.environ.get("HEADROOM_PRICING_PG_PASSWORD", "")
+    if not password:
+        return ""
+    return f"postgresql://{user}:{password}@{host}:5432/{db}"
+
+
+PRICING_DSN = _build_pricing_dsn()
 
 logger = logging.getLogger("headroom-service")
 
