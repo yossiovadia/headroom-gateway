@@ -116,6 +116,7 @@ def send_request(url, headers, messages, max_tokens=20, include_tools=False):
     payload = {
         "model": "claude-opus-4-8",
         "max_tokens": max_tokens,
+        "system": SYSTEM_PROMPT,
         "messages": messages,
     }
     if include_tools:
@@ -149,6 +150,12 @@ def send_request(url, headers, messages, max_tokens=20, include_tools=False):
     except Exception as e:
         return {"input_tokens": 0, "cache_creation": 0, "cache_read": 0,
                 "output_tokens": 0, "latency_ms": 0, "error": str(e)[:100]}
+
+
+SYSTEM_PROMPT = """You are a senior DevOps engineer helping with Kubernetes cluster management,
+application deployment, and infrastructure monitoring. You analyze tool outputs, identify issues,
+and provide actionable recommendations. Keep responses concise — under 50 words. Focus on the
+most critical findings."""
 
 
 def run_session(label, url, headers, num_turns, is_anthropic=False):
@@ -309,21 +316,31 @@ def main():
     # Comparison
     if "direct" in results and "maas" in results and results["direct"] and results["maas"]:
         d, m = results["direct"], results["maas"]
+        tokens_compressed = d["total_tokens"] - m["total_tokens"]
+        compression_pct = round(tokens_compressed / d["total_tokens"] * 100, 1) if d["total_tokens"] > 0 else 0
+
         print(f"\n{'='*60}")
         print(f"  A/B COMPARISON")
         print(f"{'='*60}")
         print(f"  {'':25s} {'Direct':>12s}  {'MaaS+Headroom':>14s}  {'Delta':>10s}")
+        print(f"  {'Total input tokens':25s} {d['total_tokens']:>12,}  {m['total_tokens']:>14,}  {tokens_compressed:>+10,}")
+        print(f"  {'Compression':25s} {'—':>12s}  {compression_pct:>13.1f}%  {f'{tokens_compressed:,} saved':>10s}")
         print(f"  {'Cache hit rate':25s} {d['cache_pct']:>11.1f}%  {m['cache_pct']:>13.1f}%  {m['cache_pct']-d['cache_pct']:>+9.1f}%")
         print(f"  {'Cached tokens':25s} {d['cached_tokens']:>12,}  {m['cached_tokens']:>14,}  {m['cached_tokens']-d['cached_tokens']:>+10,}")
         print(f"  {'Cache $ savings':25s} ${d['cache_savings']:>10.4f}  ${m['cache_savings']:>12.4f}  ${m['cache_savings']-d['cache_savings']:>+8.4f}")
         print(f"  {'Total cost':25s} ${d['cost_actual']:>10.4f}  ${m['cost_actual']:>12.4f}  ${m['cost_actual']-d['cost_actual']:>+8.4f}")
         print()
-        if m["cache_pct"] > d["cache_pct"]:
-            print(f"  → Headroom IMPROVED cache hits by {m['cache_pct']-d['cache_pct']:.1f} percentage points")
-        elif m["cache_pct"] < d["cache_pct"]:
-            print(f"  → Headroom REDUCED cache hits by {d['cache_pct']-m['cache_pct']:.1f} percentage points")
-        else:
-            print(f"  → Cache hit rates are IDENTICAL (headroom has no cache impact)")
+        if tokens_compressed > 0:
+            savings_usd = d["cost_actual"] - m["cost_actual"]
+            print(f"  → Headroom compressed {tokens_compressed:,} tokens ({compression_pct}%)")
+            if savings_usd > 0:
+                print(f"  → Net cost savings: ${savings_usd:.4f}")
+            else:
+                print(f"  → Net cost INCREASE: ${abs(savings_usd):.4f} (cache disruption > compression savings)")
+        if m["cache_pct"] != d["cache_pct"]:
+            delta = m["cache_pct"] - d["cache_pct"]
+            direction = "IMPROVED" if delta > 0 else "REDUCED"
+            print(f"  → Headroom {direction} cache hits by {abs(delta):.1f} percentage points")
 
     # Save raw results
     output_file = "/tmp/ab-cache-results.json"
