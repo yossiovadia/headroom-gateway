@@ -135,6 +135,15 @@ tr:hover td{background:var(--bg-hover)}
 </div>
 
 <div class="section">
+  <h2 class="section-title">Compression Insights</h2>
+  <div class="three-col" style="display:grid;gap:16px;margin-bottom:16px">
+    <div class="chart-box"><h2>Compression Engines</h2><canvas id="chart-engines"></canvas></div>
+    <div class="chart-box"><h2>By Model</h2><div id="model-table"></div></div>
+    <div class="chart-box"><h2>Hourly Trend</h2><canvas id="chart-hourly"></canvas></div>
+  </div>
+</div>
+
+<div class="section">
   <h2 class="section-title">Recent Activity <span style="color:var(--text2);font-size:12px;font-weight:400">(live)</span></h2>
   <div class="scroll-box" id="activity-table"></div>
 </div>
@@ -190,7 +199,7 @@ tr:hover td{background:var(--bg-hover)}
 
 <script>
 let BASE_URL=window.location.origin;
-let breakdownChart=null,usersChart=null,refreshTimer=null;
+let breakdownChart=null,usersChart=null,enginesChart=null,hourlyChart=null,refreshTimer=null;
 
 (function(){
   const p=new URLSearchParams(window.location.search);
@@ -205,6 +214,7 @@ async function refresh(){
   try{
     const d=await fetch(BASE_URL+'/stats').then(r=>r.json());
     updateAll(d);
+    try{const ins=await fetch(BASE_URL+'/stats/insights').then(r=>r.json());updateInsights(ins);}catch(e){}
     document.getElementById('status-dot').style.background='var(--green)';
     document.getElementById('status-text').textContent='connected';
     document.getElementById('last-refresh').textContent='· '+new Date().toLocaleTimeString();
@@ -283,6 +293,38 @@ function updateAll(d){
     const sc=saved>0?'var(--green)':'var(--text2)';
     return `<tr><td style="color:var(--text2)">${time}</td><td><span class="tag ${tc}">${uid}</span></td><td style="font-size:12px;color:var(--text2)">${r.model||'--'}</td><td class="num">${fmtK(r.input_tokens_original||0)}</td><td class="num">${fmtK(r.input_tokens_optimized||0)}</td><td class="num" style="color:${sc}">${saved>0?fmtK(saved):'0'}</td><td class="num" style="color:${sc}">${(r.savings_percent||0).toFixed(1)}%</td></tr>`;
   }).join('')}</tbody></table>`;
+}
+
+function updateInsights(ins){
+  // Engines donut
+  const ctx=document.getElementById('chart-engines');
+  if(!ctx)return;
+  if(enginesChart)enginesChart.destroy();
+  const e=ins.engines||{};
+  const engineLabels=['SmartCrusher (JSON)','SearchCompressor (logs)','Kompress ML (text)','Mixed','Excluded tool','Error protected','No-op'];
+  const engineData=[e.smart_crusher||0,e.search||0,e.text||0,e.mixed||0,e.excluded_tool||0,e.error_protected||0,e.noop||0];
+  const engineColors=['#3fb950','#58a6ff','#bc8cff','#39d2c0','#8b949e','#d29922','#2c3138'];
+  if(engineData.some(v=>v>0)){
+    enginesChart=new Chart(ctx,{type:'doughnut',data:{labels:engineLabels,datasets:[{data:engineData,backgroundColor:engineColors,borderWidth:1}]},options:{responsive:true,cutout:'60%',plugins:{legend:{position:'bottom',labels:{color:'#8b949e',font:{size:10},padding:8,usePointStyle:true}}}}});
+  }
+
+  // Model table
+  const mt=document.getElementById('model-table');
+  const models=ins.by_model||[];
+  if(models.length===0){mt.innerHTML='<div class="empty">No data</div>';return;}
+  mt.innerHTML=`<div class="scroll-box" style="max-height:200px"><table><thead><tr><th>Model</th><th class="num">Reqs</th><th class="num">Saved</th><th class="num">Avg %</th></tr></thead><tbody>${models.map(m=>{
+    const tc=m.tokens_saved>0?'var(--green)':'var(--text2)';
+    return `<tr><td style="font-size:11px">${m.model}</td><td class="num">${m.requests}</td><td class="num" style="color:${tc}">${fmtK(m.tokens_saved)}</td><td class="num" style="color:${tc}">${m.avg_compression_pct}%</td></tr>`;
+  }).join('')}</tbody></table></div>`;
+
+  // Hourly trend
+  const hctx=document.getElementById('chart-hourly');
+  if(!hctx)return;
+  if(hourlyChart)hourlyChart.destroy();
+  const hourly=(ins.hourly||[]).reverse();
+  if(hourly.length>0){
+    hourlyChart=new Chart(hctx,{type:'bar',data:{labels:hourly.map(h=>{const d=new Date(h.hour);return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}),datasets:[{label:'Tokens saved',data:hourly.map(h=>h.tokens_saved),backgroundColor:'rgba(63,185,80,0.6)',borderRadius:3},{label:'Requests',data:hourly.map(h=>h.requests),backgroundColor:'rgba(88,166,255,0.3)',borderRadius:3}]},options:{responsive:true,scales:{x:{ticks:{color:'#8b949e',font:{size:9}},grid:{display:false}},y:{ticks:{color:'#8b949e'},grid:{color:'rgba(44,49,56,0.5)'}}},plugins:{legend:{labels:{color:'#8b949e',font:{size:10}}}}}});
+  }
 }
 
 function fmt(n){return n==null?'--':Number(n).toLocaleString();}

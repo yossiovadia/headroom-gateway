@@ -402,6 +402,93 @@ def get_stats_history():
     }
 
 
+@app.get("/stats/insights")
+def get_insights():
+    with _db() as conn:
+        total = conn.execute("SELECT COUNT(*) as c FROM requests").fetchone()["c"]
+        if total == 0:
+            return {"total_requests": 0}
+
+        transform_counts = {}
+        for row in conn.execute("SELECT transforms FROM requests WHERE transforms != ''").fetchall():
+            for t in row["transforms"].split(","):
+                t = t.strip()
+                if t:
+                    key = t.split(":")[1] if ":" in t else t
+                    if key.startswith("protected"):
+                        continue
+                    transform_counts[t] = transform_counts.get(t, 0) + 1
+
+        engines = {"smart_crusher": 0, "search": 0, "text": 0, "kompress": 0, "code": 0, "mixed": 0, "excluded_tool": 0, "error_protected": 0, "noop": 0}
+        for t, count in transform_counts.items():
+            if "smart_crusher" in t:
+                engines["smart_crusher"] += count
+            elif "search" in t:
+                engines["search"] += count
+            elif "text" in t or "kompress" in t:
+                engines["text"] += count
+            elif "code" in t:
+                engines["code"] += count
+            elif "mixed" in t:
+                engines["mixed"] += count
+            elif "excluded" in t:
+                engines["excluded_tool"] += count
+            elif "error" in t:
+                engines["error_protected"] += count
+            elif "noop" in t:
+                engines["noop"] += count
+
+        by_model = conn.execute("""
+            SELECT model, COUNT(*) as reqs,
+                   SUM(tokens_saved) as saved,
+                   SUM(tokens_before) as total_input,
+                   ROUND(AVG(CASE WHEN tokens_saved > 0 THEN savings_pct END), 1) as avg_pct,
+                   SUM(cost_saved_usd) as cost_saved
+            FROM requests GROUP BY model ORDER BY SUM(tokens_saved) DESC
+        """).fetchall()
+
+        by_user = conn.execute("""
+            SELECT user_id, COUNT(*) as reqs,
+                   SUM(tokens_saved) as saved,
+                   SUM(tokens_before) as total_input,
+                   ROUND(AVG(CASE WHEN tokens_saved > 0 THEN savings_pct END), 1) as avg_pct,
+                   SUM(cost_saved_usd) as cost_saved
+            FROM requests GROUP BY user_id ORDER BY SUM(tokens_saved) DESC
+        """).fetchall()
+
+        hourly = conn.execute("""
+            SELECT strftime('%Y-%m-%dT%H:00:00', timestamp) as hour,
+                   COUNT(*) as reqs,
+                   SUM(CASE WHEN tokens_saved > 0 THEN 1 ELSE 0 END) as compressed,
+                   COALESCE(SUM(tokens_saved), 0) as saved,
+                   ROUND(AVG(CASE WHEN tokens_saved > 0 THEN savings_pct END), 1) as avg_pct
+            FROM requests GROUP BY hour ORDER BY hour DESC LIMIT 24
+        """).fetchall()
+
+    return {
+        "total_requests": total,
+        "engines": engines,
+        "transforms_detail": transform_counts,
+        "by_model": [
+            {"model": r["model"], "requests": r["reqs"], "tokens_saved": r["saved"] or 0,
+             "total_input": r["total_input"] or 0, "avg_compression_pct": r["avg_pct"] or 0,
+             "cost_saved_usd": round(r["cost_saved"] or 0, 4)}
+            for r in by_model
+        ],
+        "by_user": [
+            {"user": r["user_id"], "requests": r["reqs"], "tokens_saved": r["saved"] or 0,
+             "total_input": r["total_input"] or 0, "avg_compression_pct": r["avg_pct"] or 0,
+             "cost_saved_usd": round(r["cost_saved"] or 0, 4)}
+            for r in by_user
+        ],
+        "hourly": [
+            {"hour": r["hour"], "requests": r["reqs"], "compressed": r["compressed"],
+             "tokens_saved": r["saved"], "avg_pct": r["avg_pct"] or 0}
+            for r in hourly
+        ],
+    }
+
+
 @app.get("/pricing")
 def get_pricing():
     _refresh_pricing()
