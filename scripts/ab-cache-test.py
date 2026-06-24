@@ -129,10 +129,15 @@ def send_request(url, headers, messages, max_tokens=20, include_tools=False):
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         t0 = time.time()
-        resp = urllib.request.urlopen(req, context=ctx, timeout=60)
+        resp = urllib.request.urlopen(req, context=ctx, timeout=120)
         latency = time.time() - t0
-        data = json.loads(resp.read())
+        raw = resp.read()
+        data = json.loads(raw)
         usage = data.get("usage", {})
+        # Debug: print full usage on first request
+        if not hasattr(send_request, '_debug_done'):
+            print(f"  [DEBUG] Full usage response: {json.dumps(usage)}")
+            send_request._debug_done = True
         return {
             "input_tokens": usage.get("input_tokens", 0),
             "cache_creation": usage.get("cache_creation_input_tokens", 0),
@@ -297,6 +302,7 @@ def main():
                     "anthropic-version": "2023-06-01",
                 },
                 args.turns,
+                is_anthropic=True,
             )
             results["maas"] = print_summary("MaaS + headroom", b_results)
 
