@@ -319,6 +319,11 @@ def get_stats():
             if best_row:
                 best_detail = f"{best_row['tokens_before']} → {best_row['tokens_after']} tokens ({best_row['model']})"
 
+    with _db() as conn:
+        recent_rows = conn.execute(
+            "SELECT * FROM requests ORDER BY timestamp DESC LIMIT 100"
+        ).fetchall()
+
     recent_list = [
         {
             "request_id": r["id"],
@@ -329,12 +334,12 @@ def get_stats():
             "input_tokens_optimized": r["tokens_after"],
             "tokens_saved": r["tokens_saved"],
             "savings_percent": r["savings_pct"],
-            "cost_saved_usd": r.get("cost_saved_usd", 0),
-            "cost_per_mtok": r.get("cost_per_mtok", FALLBACK_COST_PER_MTOK),
+            "cost_saved_usd": r["cost_saved_usd"],
+            "cost_per_mtok": r["cost_per_mtok"],
             "tags": {"user-id": r["user_id"]},
             "total_latency_ms": 0,
         }
-        for r in _recent
+        for r in reversed(recent_rows)
     ]
 
     return {
