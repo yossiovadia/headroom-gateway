@@ -106,13 +106,21 @@ TOOL_OUTPUTS = [
 TOOL_OUTPUTS = [t if isinstance(t, str) else "\n".join(t) if isinstance(t, list) else str(t) for t in TOOL_OUTPUTS]
 
 
-def send_request(url, headers, messages, max_tokens=20):
+TOOLS = [{"name": f"tool_{i}", "description": f"Tool {i} for data retrieval",
+          "input_schema": {"type": "object", "properties": {}}}
+         for i in range(10)]
+
+
+def send_request(url, headers, messages, max_tokens=20, include_tools=False):
     """Send a request and return usage info."""
-    body = json.dumps({
+    payload = {
         "model": "claude-opus-4-8",
         "max_tokens": max_tokens,
         "messages": messages,
-    }).encode()
+    }
+    if include_tools:
+        payload["tools"] = TOOLS
+    body = json.dumps(payload).encode()
 
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -138,7 +146,7 @@ def send_request(url, headers, messages, max_tokens=20):
                 "output_tokens": 0, "latency_ms": 0, "error": str(e)[:100]}
 
 
-def run_session(label, url, headers, num_turns):
+def run_session(label, url, headers, num_turns, is_anthropic=False):
     """Run a multi-turn session and collect cache stats."""
     messages = []
     results = []
@@ -152,30 +160,39 @@ def run_session(label, url, headers, num_turns):
     print(f"{'-'*4}  {'-'*8}  {'-'*8}  {'-'*8}  {'-'*7}  {'-'*8}  {'-'*10}")
 
     for turn in range(num_turns):
-        # User asks something
-        messages.append({"role": "user", "content": f"analyze the output from tool {turn + 1}"})
-
-        # Assistant calls a tool
-        messages.append({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": f"call_{turn}", "type": "function",
-                           "function": {"name": f"tool_{turn}", "arguments": "{}"}}]
-        })
-
-        # Tool returns large output
         tool_output = TOOL_OUTPUTS[turn % len(TOOL_OUTPUTS)]
-        messages.append({
-            "role": "tool",
-            "tool_call_id": f"call_{turn}",
-            "content": tool_output,
-        })
 
-        # User asks follow-up
-        messages.append({"role": "user", "content": f"what are the key findings from tool {turn + 1}?"})
+        if is_anthropic:
+            # Anthropic native format with tool_use/tool_result
+            tool_use_id = f"toolu_{turn:04d}"
+            messages.append({"role": "user", "content": f"run tool {turn + 1} and analyze the output"})
+            messages.append({
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": tool_use_id,
+                             "name": f"tool_{turn}", "input": {}}]
+            })
+            messages.append({
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": tool_use_id,
+                             "content": tool_output}]
+            })
+        else:
+            # OpenAI format for MaaS passthrough
+            messages.append({"role": "user", "content": f"run tool {turn + 1} and analyze the output"})
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": f"call_{turn}", "type": "function",
+                               "function": {"name": f"tool_{turn}", "arguments": "{}"}}]
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": f"call_{turn}",
+                "content": tool_output,
+            })
 
         # Send request
-        r = send_request(url, headers, messages)
+        r = send_request(url, headers, messages, include_tools=is_anthropic)
         results.append(r)
 
         total = r["input_tokens"] + r["cache_creation"] + r["cache_read"]
@@ -262,6 +279,7 @@ def main():
                     "anthropic-version": "2023-06-01",
                 },
                 args.turns,
+                is_anthropic=True,
             )
             results["direct"] = print_summary("Direct (no headroom)", a_results)
 
