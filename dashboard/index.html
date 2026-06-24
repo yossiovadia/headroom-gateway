@@ -255,10 +255,9 @@ function updateAll(d){
     <div class="reason-row"><span class="reason-label">Est. Cost With Headroom</span><div class="bar-bg"><div class="bar-fill" style="width:${afterPct}%;background:var(--cyan)"></div></div><span class="reason-count">$${(cost.with_headroom_usd||0).toFixed(2)}</span></div>
   `;
 
-  // Users donut
-  const users={};
-  reqs.forEach(r=>{const u=(r.tags||{})['user-id']||'anonymous';const cpm=r.cost_per_mtok||15;if(!users[u])users[u]={requests:0,tokens_in:0,saved:0,cost:0,cost_saved:0};users[u].requests++;users[u].tokens_in+=r.input_tokens_original||0;users[u].saved+=r.tokens_saved||0;users[u].cost+=(r.input_tokens_original||0)*cpm/1000000;users[u].cost_saved+=r.cost_saved_usd||0;});
-  const ue=Object.entries(users).sort((a,b)=>b[1].cost-a[1].cost).slice(0,10);
+  // Users donut + table — from server-side aggregates (all-time, not just recent 100)
+  const byUser=d.by_user||[];
+  const ue=byUser.slice(0,10).map(u=>[u.user_id,{requests:u.requests,tokens_in:u.tokens_in,saved:u.saved,cost:u.cost,cost_saved:u.cost_saved,avg_pct:u.avg_pct}]);
 
   const ctx2=document.getElementById('chart-users').getContext('2d');
   if(usersChart)usersChart.destroy();
@@ -271,10 +270,9 @@ function updateAll(d){
   const ut=document.getElementById('user-table');
   if(ue.length===0){ut.innerHTML='<div class="empty">No user data yet</div>';return;}
   ut.innerHTML=`<table><thead><tr><th>User</th><th class="num">Requests</th><th class="num">Input Tokens</th><th class="num">Tokens Saved</th><th class="num">Savings %</th><th class="num">Est. Cost</th><th class="num">Est. Saved</th></tr></thead><tbody>${ue.map(([name,d])=>{
-    const pct=d.tokens_in>0?(d.saved/d.tokens_in*100).toFixed(1):'0.0';
-    const savedCost=(d.cost_saved||0).toFixed(4);
+    const pct=d.avg_pct||0;
     const tc=name==='anonymous'?'tag-orange':'tag-green';
-    return `<tr><td><span class="tag ${tc}">${name}</span></td><td class="num">${d.requests}</td><td class="num">${fmtK(d.tokens_in)}</td><td class="num" style="color:var(--green)">${fmtK(d.saved)}</td><td class="num" style="color:${parseFloat(pct)>0?'var(--green)':'var(--text2)'}">${pct}%</td><td class="num">$${d.cost.toFixed(4)}</td><td class="num" style="color:var(--orange)">$${savedCost}</td></tr>`;
+    return `<tr><td><span class="tag ${tc}">${name}</span></td><td class="num">${d.requests}</td><td class="num">${fmtK(d.tokens_in)}</td><td class="num" style="color:var(--green)">${fmtK(d.saved)}</td><td class="num" style="color:${pct>0?'var(--green)':'var(--text2)'}">${pct}%</td><td class="num">$${d.cost.toFixed(4)}</td><td class="num" style="color:var(--orange)">$${(d.cost_saved||0).toFixed(4)}</td></tr>`;
   }).join('')}</tbody></table>`;
 
   // Activity table

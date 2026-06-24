@@ -342,6 +342,31 @@ def get_stats():
         for r in reversed(recent_rows)
     ]
 
+    with _db() as conn:
+        user_rows = conn.execute("""
+            SELECT user_id,
+                   COUNT(*) as reqs,
+                   COALESCE(SUM(tokens_before), 0) as tokens_in,
+                   COALESCE(SUM(tokens_saved), 0) as saved,
+                   ROUND(AVG(CASE WHEN tokens_saved > 0 THEN savings_pct END), 1) as avg_pct,
+                   COALESCE(SUM(CASE WHEN tokens_saved > 0 THEN tokens_before * cost_per_mtok / 1000000.0 END), 0) as cost,
+                   COALESCE(SUM(cost_saved_usd), 0) as cost_saved
+            FROM requests GROUP BY user_id ORDER BY SUM(tokens_before) DESC
+        """).fetchall()
+
+    by_user = [
+        {
+            "user_id": r["user_id"],
+            "requests": r["reqs"],
+            "tokens_in": r["tokens_in"],
+            "saved": r["saved"],
+            "avg_pct": r["avg_pct"] or 0,
+            "cost": round(r["cost"], 4),
+            "cost_saved": round(r["cost_saved"], 4),
+        }
+        for r in user_rows
+    ]
+
     return {
         "summary": {
             "api_requests": total,
@@ -361,6 +386,7 @@ def get_stats():
                 "total_saved_usd": round(cost_agg["cost_saved"], 4),
             },
         },
+        "by_user": by_user,
         "recent_requests": recent_list,
     }
 
