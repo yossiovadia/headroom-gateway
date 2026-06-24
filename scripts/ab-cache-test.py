@@ -43,15 +43,15 @@ TOOL_OUTPUTS = [
 
     # Turn 3: file content (code, Kompress territory)
     "\n".join([
-        f"def process_{i}(data, config=None, timeout=30):",
-        f"    \"\"\"Process item {i} with validation.\"\"\"",
-        f"    if data is None:",
-        f"        raise ValueError('data required for process_{i}')",
-        f"    result = transform(data, step={i})",
-        f"    logger.info(f'process_{i} completed: {{result}}')",
-        f"    return {{'value': result, 'step': {i}, 'status': 'ok'}}",
-        ""
-    ] for i in range(30)),
+        f"def process_{i}(data, config=None, timeout=30):\n"
+        f"    \"\"\"Process item {i} with validation.\"\"\"\n"
+        f"    if data is None:\n"
+        f"        raise ValueError('data required for process_{i}')\n"
+        f"    result = transform(data, step={i})\n"
+        f"    logger.info(f'process_{i} completed: {{result}}')\n"
+        f"    return {{'value': result, 'step': {i}, 'status': 'ok'}}\n"
+        for i in range(30)
+    ]),
 
     # Turn 4: kubectl output (JSON, SmartCrusher territory)
     json.dumps([
@@ -72,22 +72,22 @@ TOOL_OUTPUTS = [
 
     # Turn 6: more code
     "\n".join([
-        f"class Handler{i}(BaseHandler):",
-        f"    def __init__(self, config):",
-        f"        super().__init__(config)",
-        f"        self.timeout = config.get('timeout', {30+i})",
-        f"    ",
-        f"    async def handle(self, request):",
-        f"        data = await request.json()",
-        f"        result = await self.process(data)",
-        f"        return Response(json.dumps(result), status=200)",
-        f"    ",
-        f"    async def process(self, data):",
-        f"        validated = self.validate(data)",
-        f"        transformed = self.transform(validated)",
-        f"        return {{'handler': 'Handler{i}', 'result': transformed}}",
-        ""
-    ] for i in range(20)),
+        f"class Handler{i}(BaseHandler):\n"
+        f"    def __init__(self, config):\n"
+        f"        super().__init__(config)\n"
+        f"        self.timeout = config.get('timeout', {30+i})\n"
+        f"    \n"
+        f"    async def handle(self, request):\n"
+        f"        data = await request.json()\n"
+        f"        result = await self.process(data)\n"
+        f"        return Response(json.dumps(result), status=200)\n"
+        f"    \n"
+        f"    async def process(self, data):\n"
+        f"        validated = self.validate(data)\n"
+        f"        transformed = self.transform(validated)\n"
+        f"        return {{'handler': 'Handler{i}', 'result': transformed}}\n"
+        for i in range(20)
+    ]),
 
     # Turn 7: API response (JSON)
     json.dumps({
