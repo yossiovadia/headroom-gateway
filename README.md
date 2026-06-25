@@ -5,6 +5,8 @@ costs across all users automatically — no client-side installation, no user ch
 
 Powered by [headroom](https://github.com/chopratejas/headroom) (Apache 2.0, 28k+ stars).
 
+![Compression Dashboard](docs/dashboard-screenshot.png)
+
 ## The Problem
 
 LLM coding agents (Claude Code, Codex, Copilot) generate massive context through
