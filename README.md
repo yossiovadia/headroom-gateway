@@ -93,6 +93,20 @@ Headroom's `ContentRouter` auto-detects content type and routes to the best comp
 | **CodeAwareCompressor** | NO | AST-based code compression (Python, JS, Go, Rust, Java, C++). Disabled by default upstream — headroom recommends code graph MCP tools instead. | 30-50% |
 | **ImageCompressor** | N/A | ML router for image size reduction. Not applicable in our text-only pipeline. | 40-90% |
 
+### When Each Engine Fires
+
+The `ContentRouter` selects an engine based on the shape of the content, not its meaning:
+
+| Engine | Triggers When | Examples |
+|--------|--------------|----------|
+| **SmartCrusher** | Content starts with `[` (JSON array) or is a JSON object containing arrays | `kubectl get pods -o json`, `pip list --format=json`, any API returning a list of items |
+| **LogCompressor** | Lines start with timestamp patterns (`2026-06-24T...`, `[INFO]`, `[ERROR]`) — structured, repetitive | `docker build` output, `pytest -v` with PASSED/FAILED lines, application logs |
+| **SearchCompressor** | Content looks like grep/ripgrep results with file paths, line numbers, and match context | `grep -rn "pattern" .`, `rg "pattern"`, search result outputs |
+| **DiffCompressor** | Content matches unified diff format (`---`, `+++`, `@@`, `+`/`-` prefixed lines) | `git diff`, `git show`, patch files |
+| **HTMLExtractor** | Content contains HTML tags (`<html>`, `<div>`, `<p>`) | Web scraping results, API responses with HTML bodies |
+| **Kompress ML** | Fallback — fires when nothing above matches. Any free-form text. | Documentation, meeting notes, prose, descriptions |
+| **None (skipped)** | Content is from an excluded tool (Read, Write, Edit), is a user/system message, is an error with stack traces, or is below 500 tokens | File reads, code edits, short responses, error tracebacks |
+
 ### Content Protection
 
 Not everything gets compressed. Headroom protects content that must remain exact:
