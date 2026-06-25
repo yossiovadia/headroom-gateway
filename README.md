@@ -55,7 +55,7 @@ This repo is one component in a larger platform. Here's what each piece does and
 | **MaaS controller** | [models-as-a-service](https://github.com/opendatahub-io/models-as-a-service) | Generates AuthPolicy, ExternalModel CRDs, manages API keys | Configures the auth pipeline that identifies users. Not running on dogfood cluster — patched manually |
 | **IPP config** (ConfigMap) | Deployed on cluster | Defines the plugin chain order | Headroom must be listed after `model-provider-resolver` and before `api-translation` |
 
-**Build independence:** This repo (headroom service + dashboard) deploys independently — no Noy rebuild needed. The Go plugin in BBR is cherry-picked by Noy into his combined build image. The only shared contract is `POST /v1/compress` with `{messages, model}` → `{messages, tokens_before, tokens_after, tokens_saved, compression_ratio}`.
+**Build independence:** This repo (headroom service + dashboard) deploys independently — no BBR rebuild needed. The Go plugin is part of the payload-processing image build. The only shared contract is `POST /v1/compress` with `{messages, model}` → `{messages, tokens_before, tokens_after, tokens_saved, compression_ratio}`.
 
 **Zero user changes.** Same MaaS URL, same API key:
 
