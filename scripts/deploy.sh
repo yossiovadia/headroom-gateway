@@ -4,7 +4,7 @@
 # Usage:
 #   ./scripts/deploy.sh                          # deploy to current namespace
 #   ./scripts/deploy.sh -n my-namespace          # deploy to specific namespace
-#   ./scripts/deploy.sh --mode bbr               # deploy with BBR/MaaS routing
+#   ./scripts/deploy.sh --mode ipp               # deploy with IPP/MaaS routing
 #   ./scripts/deploy.sh --build                  # build image on cluster first
 
 set -euo pipefail
@@ -49,8 +49,8 @@ if [ "$BUILD" = true ]; then
 fi
 
 # Configure mode
-if [ "$MODE" = "bbr" ]; then
-    echo "Configuring BBR mode..."
+if [ "$MODE" = "ipp" ]; then
+    echo "Configuring IPP mode..."
     echo "Set ANTHROPIC_TARGET_API_URL in the configmap to your MaaS gateway URL"
 fi
 

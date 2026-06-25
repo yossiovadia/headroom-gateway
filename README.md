@@ -20,7 +20,7 @@ have to think about it.
 
 ## How It Works
 
-The headroom compression service integrates with the MaaS platform via a BBR plugin.
+The headroom compression service integrates with the MaaS platform via a IPP plugin.
 Users point at MaaS as they do today — compression is automatic.
 
 ```
@@ -29,7 +29,7 @@ Client (Claude Code / Codex / Cursor)
   ▼
 MaaS Gateway (Envoy + Istio)
   ├─ Kuadrant: API key validation, user identification
-  ├─ BBR ext-proc (payload-processing):
+  ├─ IPP ext-proc (payload-processing):
   │   ├─ model-extractor: model → X-Gateway-Model-Name
   │   ├─ metering-check: balance check, user tracking
   │   ├─ model-provider-resolver: resolve ExternalModel → provider
@@ -50,14 +50,14 @@ This repo is one component in a larger platform. Here's what each piece does and
 |-----------|------|-------------|--------------------------|
 | **MaaS Gateway** | Envoy + Istio (infra) | Routes requests, TLS termination | Headroom service sits behind it as an internal ClusterIP service |
 | **Kuadrant** | kuadrant.io (operator) | API key validation, user identity, rate limiting | Identifies the user → `x-maas-username` header flows to headroom for per-user stats |
-| **BBR / payload-processing** | [ai-gateway-payload-processing](https://github.com/opendatahub-io/ai-gateway-payload-processing) | Plugin chain for request/response processing (ext-proc) | The **headroom plugin** lives here — it calls our service at `POST /v1/compress` |
+| **IPP / payload-processing** | [ai-gateway-payload-processing](https://github.com/opendatahub-io/ai-gateway-payload-processing) | Plugin chain for request/response processing (ext-proc) | The **headroom plugin** lives here — it calls our service at `POST /v1/compress` |
 | **Headroom plugin** (Go) | [yossiovadia/ai-gateway-payload-processing](https://github.com/yossiovadia/ai-gateway-payload-processing) branch `feat/headroom-on-metering` | Sends messages to headroom service, replaces with compressed versions | 3 files, 15 tests. Reads username from CycleState (set by metering plugin) |
 | **Headroom service** (Python) | **This repo** | Compression engine — wraps headroom's `compress()` with stats, persistence, pricing | Standalone deployment. Only dependency: metering Postgres for per-model pricing |
 | **Metering service** | [noyitz/ai-gateway-metering-service](https://github.com/noyitz/ai-gateway-metering-service) | Token usage tracking, per-user billing, model pricing DB | Headroom reads `model_pricing` table for cost calculations. Compression tab embedded via iframe |
 | **MaaS controller** | [models-as-a-service](https://github.com/opendatahub-io/models-as-a-service) | Generates AuthPolicy, ExternalModel CRDs, manages API keys | Configures the auth pipeline that identifies users. Not running on dogfood cluster — patched manually |
 | **IPP config** (ConfigMap) | Deployed on cluster | Defines the plugin chain order | Headroom must be listed after `model-provider-resolver` and before `api-translation` |
 
-**Build independence:** This repo (headroom service + dashboard) deploys independently — no BBR rebuild needed. The Go plugin is part of the payload-processing image build. The only shared contract is `POST /v1/compress` with `{messages, model}` → `{messages, tokens_before, tokens_after, tokens_saved, compression_ratio}`.
+**Build independence:** This repo (headroom service + dashboard) deploys independently — no IPP rebuild needed. The Go plugin is part of the payload-processing image build. The only shared contract is `POST /v1/compress` with `{messages, model}` → `{messages, tokens_before, tokens_after, tokens_saved, compression_ratio}`.
 
 **Zero user changes.** Same MaaS URL, same API key:
 
@@ -150,7 +150,7 @@ command output see much higher savings (40-70%).
 ### Prerequisites
 
 - MaaS gateway deployed (Envoy + Istio + Kuadrant)
-- payload-processing (BBR) deployed with headroom plugin registered
+- payload-processing (IPP) deployed with headroom plugin registered
 - metering-service with `model_pricing` table in Postgres
 - ipp-config ConfigMap with headroom plugin entry
 
@@ -163,7 +163,7 @@ command output see much higher savings (40-70%).
 The script validates prerequisites, builds the image on-cluster, creates a PVC for
 stats persistence, deploys the service + dashboard, and runs a smoke test.
 
-### BBR Plugin Configuration
+### IPP Plugin Configuration
 
 Add to ipp-config ConfigMap (after model-provider-resolver, before api-translation):
 
@@ -202,7 +202,7 @@ requests pass through uncompressed automatically. No user impact.
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/v1/compress` | POST | Compress messages (BBR plugin calls this) |
+| `/v1/compress` | POST | Compress messages (IPP plugin calls this) |
 | `/stats` | GET | Stats for dashboard (aggregates, per-user, recent) |
 | `/stats/insights` | GET | Engine breakdown, by-model, hourly trends |
 | `/stats-history` | GET | Lifetime stats with history |
@@ -257,5 +257,5 @@ headroom-gateway/
 | Repo | Purpose |
 |------|---------|
 | [headroom](https://github.com/chopratejas/headroom) | Upstream compression library (Apache 2.0) |
-| [ai-gateway-payload-processing](https://github.com/yossiovadia/ai-gateway-payload-processing) branch `feat/headroom-on-metering` | BBR Go plugin |
+| [ai-gateway-payload-processing](https://github.com/yossiovadia/ai-gateway-payload-processing) branch `feat/headroom-on-metering` | IPP Go plugin |
 | [ai-gateway-metering-service](https://github.com/noyitz/ai-gateway-metering-service) | MaaS dashboard (compression tab embedded) |

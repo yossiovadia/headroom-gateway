@@ -2,7 +2,7 @@
 
 ## Why Migrate
 
-Option E (BBR plugin calling `compress()`) works but reimplements features
+Option E (IPP plugin calling `compress()`) works but reimplements features
 headroom proxy ships natively. Every limitation we hit — no CCR, no image
 compression, no MCP tools, custom stats/dashboard — is solved by running
 headroom as a transparent proxy.
@@ -15,11 +15,11 @@ stop fighting its architecture and start using it.
 
 ### Current (Option E)
 ```
-User → MaaS Gateway → BBR (headroom plugin → headroom service) → Provider
+User → MaaS Gateway → IPP (headroom plugin → headroom service) → Provider
        (auth first)    (compress via API call)
 ```
 - Headroom sees messages via `POST /v1/compress` — a utility endpoint
-- BBR plugin is a Go shim that forwards messages and replaces them
+- IPP plugin is a Go shim that forwards messages and replaces them
 - Custom Python service wraps `compress()` with stats, dashboard, persistence
 - No CCR, no image compression, no MCP tools, no streaming awareness
 
@@ -58,7 +58,7 @@ Everything else stays the same: same API key, same model names, same tools.
 | Aspect | Option E (current) | Option A (target) |
 |--------|-------------------|-------------------|
 | Headroom deployment | Custom Python service | `headroom proxy` binary (stock) |
-| BBR plugin | Required (Go code in payload-processing) | Not needed — can be disabled |
+| IPP plugin | Required (Go code in payload-processing) | Not needed — can be disabled |
 | Dashboard | Custom HTML + nginx pod | Built into headroom proxy `/dashboard` |
 | Stats persistence | Custom SQLite on PVC | Headroom's built-in storage (`store_url`) |
 | Per-user tracking | Via `x-maas-username` header (auth pipeline issue) | Headroom reads API key or user header directly |
@@ -130,7 +130,7 @@ User → MaaS → Provider.
 **Answer:** The extra hop is within the cluster (headroom and MaaS are both
 in `openshift-ingress` namespace). Internal latency is <1ms. Compression
 saves 3-10x more latency than it adds (smaller request = faster provider
-processing). The current Option E also has an extra hop (BBR → headroom
+processing). The current Option E also has an extra hop (IPP → headroom
 service) so it's not a new cost.
 
 **Net effect:** Negligible. Net positive due to smaller requests.
@@ -175,7 +175,7 @@ in parallel.
 - [ ] Verify metering works (usage event recorded)
 
 ### Phase 1: Parallel testing (no user impact)
-- [ ] Disable headroom BBR plugin in ipp-config (remove the entry, restart BBR)
+- [ ] Disable headroom IPP plugin in ipp-config (remove the entry, restart IPP)
 - [ ] Verify Claude Code works through MaaS directly (no compression — baseline)
 - [ ] Point ONE test user at headroom proxy URL
 - [ ] Verify: compression works, dashboard shows data, CCR available
@@ -194,7 +194,7 @@ in parallel.
 
 ### Phase 3: Full migration
 - [ ] Move all users to headroom proxy URL
-- [ ] Remove headroom BBR plugin from ipp-config
+- [ ] Remove headroom IPP plugin from ipp-config
 - [ ] Remove headroom-service deployment (Option E service)
 - [ ] Keep headroom-dashboard deployment if custom dashboard preferred
 - [ ] Update deploy script for Option A
@@ -219,7 +219,7 @@ but everything else works.
 
 - `service/headroom_service.py` — replaced by headroom proxy binary
 - `service/Dockerfile` — replaced by stock headroom proxy image
-- BBR headroom plugin (Go code) — no longer needed
+- IPP headroom plugin (Go code) — no longer needed
 - Custom SQLite stats code — headroom proxy has built-in persistence
 - Per-user CompressionCache code — proxy handles session tracking natively
 

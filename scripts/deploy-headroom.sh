@@ -6,14 +6,14 @@
 # Prerequisites:
 #   - oc logged into the target cluster (oc login ...)
 #   - MaaS gateway deployed (Envoy + Istio + Kuadrant)
-#   - payload-processing (BBR/IPP) deployed with headroom plugin registered
+#   - payload-processing (IPP) deployed with headroom plugin registered
 #     (from yossiovadia/ai-gateway-payload-processing branch feat/headroom-on-metering)
 #   - metering-service deployed with model_pricing table in Postgres
 #     (for per-model cost tracking — falls back to $15/MTok if unavailable)
 #   - ipp-config ConfigMap exists (headroom plugin entry added after deployment)
 #
 # This script deploys ONLY the headroom compression service and dashboard.
-# It does NOT touch MaaS, BBR, metering, or Envoy configuration.
+# It does NOT touch MaaS, IPP, metering, or Envoy configuration.
 #
 # Usage:
 #   ./scripts/deploy-headroom.sh                                    # deploy to openshift-ingress
@@ -65,7 +65,7 @@ echo "  namespace: $NAMESPACE"
 
 if ! oc get deployment payload-processing -n "$NAMESPACE" &>/dev/null; then
   echo "FAIL: payload-processing deployment not found in $NAMESPACE"
-  echo "  The BBR/IPP must be deployed first with the headroom plugin registered."
+  echo "  The IPP must be deployed first with the headroom plugin registered."
   exit 1
 fi
 echo "  payload-processing: found"

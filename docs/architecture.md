@@ -35,7 +35,7 @@ Client (Claude Code / Codex / Cursor)
   ▼
 MaaS Gateway (Envoy + Istio)
   ├─ Kuadrant: API key validation
-  ├─ ext_proc (payload-processing / BBR):
+  ├─ ext_proc (payload-processing / IPP):
   │   ├─ body-field-to-header: model → X-Gateway-Model-Name
   │   ├─ model-provider-resolver: resolve ExternalModel → provider
   │   ├─ headroom plugin ─────────────────────────┐
@@ -75,13 +75,13 @@ claude --model claude-opus-4-8
 ### How It Works
 
 1. User sends request to MaaS (exactly as today)
-2. BBR headroom plugin sends full messages array to headroom service `POST /v1/compress`
+2. IPP headroom plugin sends full messages array to headroom service `POST /v1/compress`
 3. Headroom service checks per-user `CompressionCache`:
    - Tool content seen before → use cached compressed version (instant, no re-compression)
    - New content → compress via headroom's `compress()` pipeline → cache result
 4. Returns compressed messages + stats to plugin
 5. Plugin replaces messages in request body, writes savings to CycleState
-6. BBR continues: api-translation, apikey-injection, metering
+6. IPP continues: api-translation, apikey-injection, metering
 7. Request goes to provider with compressed input
 
 ### Compression Pipeline (headroom internals)
@@ -138,7 +138,7 @@ Request #3: User reads file C + files A,B in history → both from cache, only C
 | **CacheAligner** (prefix stability) | YES | YES (per-call) | None |
 | **Cross-request compression cache** | YES (proxy session) | YES (per-user CompressionCache) | **Closed** |
 | **CCR** (retrieve compressed originals) | YES — LLM calls `headroom_retrieve` | NO — LLM talks to provider, not headroom | **Open** |
-| **MCP tools** (compress, retrieve, stats) | YES — headroom as MCP server | NO — BBR plugin architecture | **Open** |
+| **MCP tools** (compress, retrieve, stats) | YES — headroom as MCP server | NO — IPP plugin architecture | **Open** |
 | **Session-aware turn distance** | YES — proxy tracks full conversation | Partial — `compress()` infers from message array | **Minor** |
 | **Per-user stats** | YES (local) | YES (SQLite, per-model pricing from Postgres) | None |
 | **Multi-user** | N/A (single user) | YES (200 concurrent sessions) | **Advantage** |
@@ -160,11 +160,11 @@ Impact: Low for coding agents. Claude Code can re-read files via its Read tool.
 The compressed summary gives it enough context to know WHAT to re-read. For
 RAG/search use cases where the original source isn't re-readable, this gap matters more.
 
-Fix path: Add headroom as an MCP server alongside the BBR flow. Claude Code already
+Fix path: Add headroom as an MCP server alongside the IPP flow. Claude Code already
 supports MCP servers — headroom ships `headroom mcp serve`. This would require
 users to configure headroom as an MCP server in their Claude Code settings, which
 partially defeats the "zero install" advantage. A transparent solution would require
-the BBR plugin to inject `headroom_retrieve` as a tool in the request, which is
+the IPP plugin to inject `headroom_retrieve` as a tool in the request, which is
 architecturally complex.
 
 **MCP Tools:**
@@ -212,7 +212,7 @@ all traffic through the dashboard.
 ### Prerequisites
 
 - MaaS gateway deployed (Envoy + Istio + Kuadrant)
-- payload-processing (BBR) deployed with headroom plugin registered
+- payload-processing (IPP) deployed with headroom plugin registered
 - metering-service with `model_pricing` table in Postgres (for per-model pricing)
 - ipp-config ConfigMap (headroom plugin entry added after deployment)
 
@@ -238,7 +238,7 @@ after deployment.
 | `headroom-dashboard` Route | External HTTPS route |
 | Compression tab in MaaS dashboard | Embedded at `/compression` on metering-service |
 
-### BBR Plugin Configuration
+### IPP Plugin Configuration
 
 After deployment, add to ipp-config ConfigMap:
 
@@ -270,7 +270,7 @@ falls back to CPU if no NVIDIA GPU is available. No flags or configuration neede
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/v1/compress` | POST | Compress messages (BBR plugin calls this) |
+| `/v1/compress` | POST | Compress messages (IPP plugin calls this) |
 | `/stats` | GET | Stats for dashboard (aggregates, per-user, recent) |
 | `/stats-history` | GET | Lifetime stats with history |
 | `/pricing` | GET | Per-model pricing from metering Postgres |
