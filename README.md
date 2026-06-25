@@ -1,216 +1,228 @@
 # Headroom Gateway
 
-A centralized context compression service for enterprise LLM usage. Deploy once on
-OpenShift/Kubernetes, point all users at it, automatically reduce token costs by
-50-70% on tool-heavy workloads (coding agents, RAG, API calls) — with zero impact
-on response quality.
+Centralized context compression service for enterprise LLM usage. Reduces token
+costs across all users automatically — no client-side installation, no user changes.
 
-Powered by [headroom](https://github.com/chopratejas/headroom) (28k+ stars).
+Powered by [headroom](https://github.com/chopratejas/headroom) (Apache 2.0, 28k+ stars).
 
 ## The Problem
 
-LLM-powered coding agents (Claude Code, Codex, Copilot) generate enormous context
-through tool calls — file reads, build logs, API responses, search results. A typical
-coding session hits 150K+ tokens, of which **80% is tool output**. Every request
-sends the full conversation history, and you pay per token.
+LLM coding agents (Claude Code, Codex, Copilot) generate massive context through
+tool calls — file reads, build logs, API responses, search results. A typical
+coding session reaches 150K+ tokens, of which **80% is tool output**. Every request
+sends the full conversation history. Token costs scale linearly.
 
-Most of that tool output is repetitive, verbose, and compressible without affecting
-the model's ability to reason about it. But compression needs to happen transparently
-— users shouldn't have to think about it.
+Most of that tool output is old, repetitive, and compressible without affecting
+the model's reasoning. But compression must happen transparently — users shouldn't
+have to think about it.
 
-## The Solution
+## How It Works
 
-Headroom Gateway sits between your users and the LLM provider. It intercepts
-requests, compresses old tool outputs using ML-based compression (Kompress) and
-rule-based compression (smart_crusher), and forwards the smaller request to the
-provider. The model sees compressed context and produces the same quality response.
+The headroom compression service integrates with the MaaS platform via a BBR plugin.
+Users point at MaaS as they do today — compression is automatic.
 
 ```
-Without:  User → Provider (150K tokens, full price)
-With:     User → Headroom Gateway → Provider (50K tokens, 67% less)
+Client (Claude Code / Codex / Cursor)
+  │
+  ▼
+MaaS Gateway (Envoy + Istio)
+  ├─ Kuadrant: API key validation, user identification
+  ├─ BBR ext-proc (payload-processing):
+  │   ├─ model-extractor: model → X-Gateway-Model-Name
+  │   ├─ metering-check: balance check, user tracking
+  │   ├─ model-provider-resolver: resolve ExternalModel → provider
+  │   ├─ headroom plugin ──── POST /v1/compress ──▶ Headroom Service
+  │   │                    ◀── compressed messages ─┘  (this repo)
+  │   ├─ api-translation: passthrough
+  │   └─ apikey-injection: inject provider key
+  │
+  ▼
+Provider (api.anthropic.com / api.openai.com)
 ```
 
-Users change one environment variable:
+**Zero user changes.** Same MaaS URL, same API key:
 
 ```bash
-export ANTHROPIC_BASE_URL=https://headroom.apps.company.com
-claude  # that's it
+export ANTHROPIC_BASE_URL=https://maas.company.com/llm/ext-opus
+export ANTHROPIC_API_KEY=<MaaS-key>
+claude --model claude-opus-4-8
 ```
 
-## Why This Architecture
+## Compression Results
 
-We explored several approaches before landing here:
+From production deployment on OpenShift:
 
-1. **BBR ext-proc plugin** — Forced headroom into Envoy's ext-proc pipeline.
-   Required custom Go plugins, custom Python endpoints, and fought the buffering
-   model. Works but wrong abstraction.
-
-2. **Client-side proxy** — Each user runs headroom locally. Works great but isn't
-   centralized — no org-wide visibility or control.
-
-3. **Centralized proxy service** (this) — Deploy headroom as a standalone K8s
-   service. Uses headroom exactly as designed: a transparent HTTP proxy with
-   session-aware compression. No custom code needed. One deployment serves all users.
-
-## Proven Results
-
-From our POC testing on OpenShift:
-
-| Content Type | Compression | Quality Impact |
+| Content Type | Savings | Engine |
 |---|---|---|
-| Search/RAG results (50 docs) | **61.5%** | None |
-| K8s API responses (30 pods) | **70.3%** | None |
-| Log output (50 lines) | **65%** | None |
-| Code files | **53%** | None |
-| A/B test (real Claude response) | **55%** | Identical correct answer |
-
-Cost impact at Claude Opus pricing ($15/M input tokens):
-- Per request with tool outputs: ~$0.03 saved
-- Per 1M requests: ~$31,000 saved
+| Kubernetes API responses (JSON) | **60-74%** | SmartCrusher |
+| Build/test logs | **65-80%** | LogCompressor / SearchCompressor |
+| Search/grep results | **70-80%** | SearchCompressor |
+| Free text / documentation | **10-35%** | Kompress ML |
+| Git diffs | **40-60%** | DiffCompressor |
+| Code editing sessions (mixed) | **5-15%** | Kompress ML (most content is excluded — see below) |
 
 ## Compression Engines
 
 Headroom's `ContentRouter` auto-detects content type and routes to the best compressor:
 
-| Engine | Active | What It Does | When It Fires | Typical Savings |
-|--------|--------|-------------|---------------|-----------------|
-| **SmartCrusher** | YES | Compresses JSON arrays — deduplicates structure, keeps important items and anomalies. Rust-backed via PyO3. | JSON arrays: kubectl output, API responses, search results | 60-74% |
-| **Kompress ML** | YES | Custom ML model (ModernBERT tokenizer + ONNX) trained on AI agent traces. Scores token importance and removes low-value tokens. | Free text, prose, documentation — anything that doesn't match other engines | 10-35% |
-| **SearchCompressor** | YES | Compresses grep/ripgrep results — keeps matching lines, deduplicates surrounding context | Tool outputs that look like search/grep results | 70-80% |
-| **LogCompressor** | YES | Compresses build logs and test output — keeps errors/failures, deduplicates repetitive timestamp lines | Structured log output with timestamps | 65-80% |
-| **DiffCompressor** | YES | Compresses git diffs — keeps diff hunks, deduplicates similar changes | Content matching unified diff format | 40-60% |
-| **HTMLExtractor** | YES | Extracts meaningful text from HTML content, strips tags and boilerplate | HTML content in tool outputs | varies |
-| **CodeAwareCompressor** | NO | AST-based code compression — preserves function signatures, removes bodies. Supports Python, JS, Go, Rust, Java, C++ | Source code. **Disabled by default** by headroom upstream — they recommend code graph MCP tools instead | 30-50% |
-| **ImageCompressor** | N/A | ML router for image size reduction | Images — not applicable in our text-only pipeline | 40-90% |
+| Engine | Active | What It Does | Typical Savings |
+|--------|--------|-------------|-----------------|
+| **SmartCrusher** | YES | Compresses JSON arrays — deduplicates structure, keeps important items and anomalies. Rust-backed via PyO3. | 60-74% |
+| **Kompress ML** | YES | Custom ML model (ModernBERT tokenizer + ONNX) trained on AI agent traces. Scores token importance, removes low-value tokens. | 10-35% |
+| **SearchCompressor** | YES | Compresses grep/ripgrep results — keeps matching lines, deduplicates context. | 70-80% |
+| **LogCompressor** | YES | Compresses build logs and test output — keeps errors/failures, deduplicates repetitive lines. | 65-80% |
+| **DiffCompressor** | YES | Compresses git diffs — keeps hunks, deduplicates similar changes. | 40-60% |
+| **HTMLExtractor** | YES | Extracts meaningful text from HTML, strips tags and boilerplate. | varies |
+| **CodeAwareCompressor** | NO | AST-based code compression (Python, JS, Go, Rust, Java, C++). Disabled by default upstream — headroom recommends code graph MCP tools instead. | 30-50% |
+| **ImageCompressor** | N/A | ML router for image size reduction. Not applicable in our text-only pipeline. | 40-90% |
 
-### Content Protection (not compressed)
+### Content Protection
 
 Not everything gets compressed. Headroom protects content that must remain exact:
 
 | Content | Action | Reason |
 |---------|--------|--------|
-| **User messages** | Protected | Model needs exact user input |
-| **System prompts** | Protected | Cache-hot instruction bytes |
-| **Read tool outputs** (fresh) | Excluded | Exact file content needed for code editing |
-| **Write/Edit tool outputs** | Excluded | Mutation records must be exact to prevent duplicate edits |
-| **Error outputs** | Protected | Tracebacks and stack traces preserved verbatim for debugging |
-| **Recent tool outputs** | Protected | Last N turns kept verbatim (configurable via `protect_recent`) |
-| **Stale Read outputs** | Compressed | File was edited after reading — content is factually wrong (ReadLifecycle) |
-| **Superseded Read outputs** | Compressed | File was re-read later — content is redundant (ReadLifecycle) |
+| User messages | Protected | Model needs exact user input |
+| System prompts | Protected | Cache-hot instruction bytes |
+| Read tool outputs (fresh) | Excluded | Exact file content needed for code editing |
+| Write/Edit tool outputs | Excluded | Mutation records must be exact to prevent duplicate edits |
+| Error outputs | Protected | Tracebacks and stack traces preserved verbatim for debugging |
+| Recent tool outputs | Protected | Last N turns kept verbatim |
+| Stale Read outputs | Compressed | File was edited after reading — content is factually wrong |
+| Superseded Read outputs | Compressed | File was re-read later — content is redundant |
 
-## Quick Start
+### Why Code Editing Sessions Show Lower Savings
 
-### Local Development
+Coding sessions are dominated by Read/Edit tool outputs which headroom deliberately
+excludes. Without retrieval support (CCR), compressing a file read would mean the LLM
+works from a summary instead of exact code — risking wrong edits. Headroom's
+ReadLifecycle catches stale reads (67% of all reads) and superseded reads (12%),
+but fresh reads (20%) stay verbatim. DevOps/debugging sessions with logs, JSON, and
+command output see much higher savings (40-70%).
 
-```bash
-# Start headroom locally
-docker compose up -d
+## Features
 
-# Point Claude Code at it
-export ANTHROPIC_BASE_URL=http://localhost:8787
-export ANTHROPIC_API_KEY=<your-key>
-claude
+- **Per-user session cache** — avoids re-compressing content seen in earlier requests (same user, same session)
+- **Per-model pricing** — real costs from metering Postgres, not hardcoded estimates
+- **SQLite stats persistence** — survives pod restarts (PVC-backed)
+- **GPU acceleration** — onnxruntime-gpu auto-detects NVIDIA GPUs, falls back to CPU
+- **4 gunicorn workers** — handles 50+ concurrent users
+- **Dashboard** — KPIs, per-user breakdown, compression engine breakdown, hourly trends, playground
+- **Playground tab** — interactive compression demo with pre-defined samples
+- **Prometheus metrics** — `/metrics` endpoint with token counters
+- **Idempotent deploy script** — preflight checks, skip-if-unchanged builds
 
-# Check compression stats
-curl http://localhost:8787/stats
-```
+## Deployment
 
-### OpenShift Deployment
+### Prerequisites
 
-```bash
-# One-command deploy (builds image on cluster)
-./scripts/deploy.sh --build -n my-namespace
+- MaaS gateway deployed (Envoy + Istio + Kuadrant)
+- payload-processing (BBR) deployed with headroom plugin registered
+- metering-service with `model_pricing` table in Postgres
+- ipp-config ConfigMap with headroom plugin entry
 
-# Point users at the route
-export ANTHROPIC_BASE_URL=https://headroom-gateway-my-namespace.apps.cluster.com
-```
-
-See [deployment guide](docs/deployment-guide.md) for detailed instructions.
-
-## Two Modes
-
-### Mode A: Standalone (Direct to Provider)
-
-```
-Users → Headroom Gateway → Anthropic / OpenAI / Vertex AI
-```
-
-Users bring their own API keys. Headroom passes them through, compresses context,
-forwards to the provider. Built-in Prometheus metrics track per-user token savings.
-
-### Mode B: With BBR/MaaS Platform
-
-```
-Users → Headroom Gateway → MaaS Gateway (metering + auth) → Provider
-```
-
-Headroom compresses, then forwards to the MaaS gateway which handles metering,
-API key management, rate limiting, and provider auth. The metering dashboard
-shows compressed token counts — reflecting actual cost savings.
-
-Switch modes with one env var:
+### Deploy
 
 ```bash
-# Mode A (default): direct to provider
-# (no config needed)
-
-# Mode B: route through MaaS gateway
-ANTHROPIC_TARGET_API_URL=https://maas-gateway.company.com/llm/ext-claude-sonnet
+./scripts/deploy-headroom.sh --hf-token hf_xxx
 ```
 
-## Multi-Provider Support
+The script validates prerequisites, builds the image on-cluster, creates a PVC for
+stats persistence, deploys the service + dashboard, and runs a smoke test.
 
-Headroom routes by API format — one instance handles all providers:
+### BBR Plugin Configuration
 
-| Path | Provider |
-|------|----------|
-| `/v1/messages` | Anthropic |
-| `/v1/chat/completions` | OpenAI |
-| `/v1/projects/.../publishers/...` | Vertex AI |
-| Bedrock format | AWS Bedrock |
+Add to ipp-config ConfigMap (after model-provider-resolver, before api-translation):
 
-## Observability
+```yaml
+- name: headroom
+  type: headroom
+  parameters:
+    headroomURL: "http://headroom-service.openshift-ingress.svc:8787"
+    timeoutSeconds: 10
+    failOpen: true
+```
 
-### Without BBR
+### GPU Support
 
-- **Prometheus** `/metrics` — token savings, compression ratios, request counts
-- **Stats** `/stats` — real-time compression dashboard
-- **Savings tracker** — cumulative savings persisted to disk
-- **Per-user** — set `x-headroom-user-id` header for per-user breakdown
+GPU is auto-detected at runtime. No flags needed.
 
-### With BBR/MaaS
+| Resource | CPU-only | With GPU |
+|----------|----------|----------|
+| Kompress ML latency | ~3s | <100ms |
+| Concurrent users | ~50 | ~200+ |
+| GPU required | — | 1x NVIDIA L4/T4 |
+| Memory | 4-8Gi | 4-8Gi |
 
-All of the above, plus:
-- MaaS metering dashboard with compressed token counts
-- CloudEvents audit trail per user/group/subscription
+### Emergency Controls
 
-## Capacity Planning
+**Kill switch** — remove headroom from ipp-config and restart payload-processing (~30 seconds):
+```bash
+oc edit configmap ipp-config -n openshift-ingress  # delete headroom block
+oc rollout restart deployment/payload-processing
+```
 
-| Setup | Concurrent Users | Latency Overhead |
-|-------|-----------------|-----------------|
-| CPU-only (4 cores) | ~20 | ~3s per compression |
-| GPU (NVIDIA L4/T4) | ~200 | <100ms per compression |
-| JSON-only (no ML) | ~500 | <50ms |
+**Automatic fail-open** — if the headroom service is down or slow (>10s timeout),
+requests pass through uncompressed automatically. No user impact.
 
-Headroom is stateless per-request — scale horizontally with replicas.
-HPA included in the deployment manifests.
+## API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/v1/compress` | POST | Compress messages (BBR plugin calls this) |
+| `/stats` | GET | Stats for dashboard (aggregates, per-user, recent) |
+| `/stats/insights` | GET | Engine breakdown, by-model, hourly trends |
+| `/stats-history` | GET | Lifetime stats with history |
+| `/pricing` | GET | Per-model pricing from metering Postgres |
+| `/sessions` | GET | Active user sessions and cache hit rates |
+| `/readyz` | GET | Readiness probe (checks SQLite) |
+| `/health` | GET | Liveness probe |
+| `/metrics` | GET | Prometheus counters |
+
+## Testing
+
+37 tests run against the live deployed service:
+
+```bash
+# Fast tests (compression, stats, health, dashboard)
+HEADROOM_TEST_URL=https://headroom-service-... pytest tests/ -v
+
+# Including persistence tests (restarts pod, ~60s)
+HEADROOM_TEST_URL=https://headroom-service-... pytest tests/ -v --run-slow
+
+# Benchmark compression latency
+./scripts/benchmark-compression.sh --requests 10
+```
 
 ## Project Structure
 
 ```
 headroom-gateway/
-├── deploy/
-│   ├── openshift/          # K8s/OpenShift manifests (kustomize)
-│   └── docker/             # Dockerfile
-├── docs/                   # Guides and architecture docs
-├── scripts/                # Deploy and test scripts
-├── monitoring/             # Grafana dashboard + alerts
-├── docker-compose.yaml     # Local development
-└── README.md
+├── service/
+│   ├── headroom_service.py     # FastAPI compression service
+│   └── Dockerfile              # CUDA + headroom-ai + onnxruntime-gpu
+├── dashboard/
+│   └── index.html              # Dashboard + Playground (stats, per-user, pipeline viz)
+├── scripts/
+│   ├── deploy-headroom.sh      # Idempotent OpenShift deployment
+│   ├── benchmark-compression.sh # Latency benchmark
+│   └── ab-cache-test.py        # A/B cache hit comparison
+├── tests/
+│   ├── test_compress.py        # 14 compression tests
+│   ├── test_stats.py           # 9 stats tests
+│   ├── test_dashboard.py       # 7 dashboard contract tests
+│   ├── test_health.py          # 5 health/metrics tests
+│   └── test_persistence.py     # 2 persistence tests (pod restart)
+├── docs/
+│   └── architecture.md         # Full design doc with gap analysis
+├── LICENSE                     # Apache 2.0
+└── NOTICE                      # Third-party attributions
 ```
 
-## Related
+## Related Repos
 
-- [headroom](https://github.com/chopratejas/headroom) — upstream context compression library
-- [ai-gateway-payload-processing](https://github.com/opendatahub-io/ai-gateway-payload-processing) — BBR plugin system (MaaS platform)
-- [Issue #324](https://github.com/opendatahub-io/ai-gateway-payload-processing/issues/324) — original exploration issue
+| Repo | Purpose |
+|------|---------|
+| [headroom](https://github.com/chopratejas/headroom) | Upstream compression library (Apache 2.0) |
+| [ai-gateway-payload-processing](https://github.com/yossiovadia/ai-gateway-payload-processing) branch `feat/headroom-on-metering` | BBR Go plugin |
+| [ai-gateway-metering-service](https://github.com/noyitz/ai-gateway-metering-service) | MaaS dashboard (compression tab embedded) |
