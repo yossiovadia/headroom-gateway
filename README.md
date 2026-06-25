@@ -68,6 +68,36 @@ Cost impact at Claude Opus pricing ($15/M input tokens):
 - Per request with tool outputs: ~$0.03 saved
 - Per 1M requests: ~$31,000 saved
 
+## Compression Engines
+
+Headroom's `ContentRouter` auto-detects content type and routes to the best compressor:
+
+| Engine | Active | What It Does | When It Fires | Typical Savings |
+|--------|--------|-------------|---------------|-----------------|
+| **SmartCrusher** | YES | Compresses JSON arrays — deduplicates structure, keeps important items and anomalies. Rust-backed via PyO3. | JSON arrays: kubectl output, API responses, search results | 60-74% |
+| **Kompress ML** | YES | Custom ML model (ModernBERT tokenizer + ONNX) trained on AI agent traces. Scores token importance and removes low-value tokens. | Free text, prose, documentation — anything that doesn't match other engines | 10-35% |
+| **SearchCompressor** | YES | Compresses grep/ripgrep results — keeps matching lines, deduplicates surrounding context | Tool outputs that look like search/grep results | 70-80% |
+| **LogCompressor** | YES | Compresses build logs and test output — keeps errors/failures, deduplicates repetitive timestamp lines | Structured log output with timestamps | 65-80% |
+| **DiffCompressor** | YES | Compresses git diffs — keeps diff hunks, deduplicates similar changes | Content matching unified diff format | 40-60% |
+| **HTMLExtractor** | YES | Extracts meaningful text from HTML content, strips tags and boilerplate | HTML content in tool outputs | varies |
+| **CodeAwareCompressor** | NO | AST-based code compression — preserves function signatures, removes bodies. Supports Python, JS, Go, Rust, Java, C++ | Source code. **Disabled by default** by headroom upstream — they recommend code graph MCP tools instead | 30-50% |
+| **ImageCompressor** | N/A | ML router for image size reduction | Images — not applicable in our text-only pipeline | 40-90% |
+
+### Content Protection (not compressed)
+
+Not everything gets compressed. Headroom protects content that must remain exact:
+
+| Content | Action | Reason |
+|---------|--------|--------|
+| **User messages** | Protected | Model needs exact user input |
+| **System prompts** | Protected | Cache-hot instruction bytes |
+| **Read tool outputs** (fresh) | Excluded | Exact file content needed for code editing |
+| **Write/Edit tool outputs** | Excluded | Mutation records must be exact to prevent duplicate edits |
+| **Error outputs** | Protected | Tracebacks and stack traces preserved verbatim for debugging |
+| **Recent tool outputs** | Protected | Last N turns kept verbatim (configurable via `protect_recent`) |
+| **Stale Read outputs** | Compressed | File was edited after reading — content is factually wrong (ReadLifecycle) |
+| **Superseded Read outputs** | Compressed | File was re-read later — content is redundant (ReadLifecycle) |
+
 ## Quick Start
 
 ### Local Development
