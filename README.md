@@ -40,6 +40,23 @@ MaaS Gateway (Envoy + Istio)
 Provider (api.anthropic.com / api.openai.com)
 ```
 
+### How It Fits Together
+
+This repo is one component in a larger platform. Here's what each piece does and who owns it:
+
+| Component | Repo | What It Does | Relationship to Headroom |
+|-----------|------|-------------|--------------------------|
+| **MaaS Gateway** | Envoy + Istio (infra) | Routes requests, TLS termination | Headroom service sits behind it as an internal ClusterIP service |
+| **Kuadrant** | kuadrant.io (operator) | API key validation, user identity, rate limiting | Identifies the user → `x-maas-username` header flows to headroom for per-user stats |
+| **BBR / payload-processing** | [ai-gateway-payload-processing](https://github.com/opendatahub-io/ai-gateway-payload-processing) | Plugin chain for request/response processing (ext-proc) | The **headroom plugin** lives here — it calls our service at `POST /v1/compress` |
+| **Headroom plugin** (Go) | [yossiovadia/ai-gateway-payload-processing](https://github.com/yossiovadia/ai-gateway-payload-processing) branch `feat/headroom-on-metering` | Sends messages to headroom service, replaces with compressed versions | 3 files, 15 tests. Reads username from CycleState (set by metering plugin) |
+| **Headroom service** (Python) | **This repo** | Compression engine — wraps headroom's `compress()` with stats, persistence, pricing | Standalone deployment. Only dependency: metering Postgres for per-model pricing |
+| **Metering service** | [noyitz/ai-gateway-metering-service](https://github.com/noyitz/ai-gateway-metering-service) | Token usage tracking, per-user billing, model pricing DB | Headroom reads `model_pricing` table for cost calculations. Compression tab embedded via iframe |
+| **MaaS controller** | [models-as-a-service](https://github.com/opendatahub-io/models-as-a-service) | Generates AuthPolicy, ExternalModel CRDs, manages API keys | Configures the auth pipeline that identifies users. Not running on dogfood cluster — patched manually |
+| **IPP config** (ConfigMap) | Deployed on cluster | Defines the plugin chain order | Headroom must be listed after `model-provider-resolver` and before `api-translation` |
+
+**Build independence:** This repo (headroom service + dashboard) deploys independently — no Noy rebuild needed. The Go plugin in BBR is cherry-picked by Noy into his combined build image. The only shared contract is `POST /v1/compress` with `{messages, model}` → `{messages, tokens_before, tokens_after, tokens_saved, compression_ratio}`.
+
 **Zero user changes.** Same MaaS URL, same API key:
 
 ```bash
