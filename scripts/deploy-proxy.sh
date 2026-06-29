@@ -196,6 +196,8 @@ spec:
           value: "1"
         - name: HEADROOM_STALE_READ_COMPRESS_AFTER_TURNS
           value: "1"
+        - name: HEADROOM_KOMPRESS_BACKEND
+          value: "pytorch"
         resources:
           requests:
             cpu: "4"
