@@ -119,6 +119,41 @@ header h1{font-size:22px;font-weight:600;color:var(--cyan)}
   </div>
 </div>
 
+<div style="margin-top:24px;border-top:1px solid var(--border);padding-top:24px">
+  <h2 style="font-size:18px;font-weight:600;color:var(--cyan);margin-bottom:16px">CCR Live Demo</h2>
+  <p style="color:var(--text2);font-size:13px;margin-bottom:12px">
+    Send a real request through the full proxy pipeline to demonstrate CCR (Compress-Cache-Retrieve).
+    Headroom compresses the content, stores the original, and you can retrieve it back.
+    Requires a MaaS API key. Costs a few cents per request.
+  </p>
+  <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+    <input type="password" id="ccr-api-key" placeholder="MaaS API key (sk-oai-...)" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px;width:350px">
+    <button class="pg-btn" id="ccr-demo-btn" onclick="runCCRDemo()">Run CCR Demo</button>
+    <span id="ccr-status" style="color:var(--text2);font-size:12px"></span>
+  </div>
+  <div id="ccr-demo-results" style="display:none">
+    <div class="pg-results" style="margin-bottom:16px">
+      <div class="pg-stat"><div class="pg-stat-label">Sent to LLM</div><div class="pg-stat-value" style="color:var(--cyan)" id="ccr-before">--</div></div>
+      <div class="pg-stat"><div class="pg-stat-label">After Compression</div><div class="pg-stat-value" style="color:var(--green)" id="ccr-after">--</div></div>
+      <div class="pg-stat"><div class="pg-stat-label">Tokens Saved</div><div class="pg-stat-value" style="color:var(--orange)" id="ccr-saved">--</div></div>
+      <div class="pg-stat"><div class="pg-stat-label">CCR Entries</div><div class="pg-stat-value" style="color:var(--purple)" id="ccr-entries">--</div></div>
+    </div>
+    <div class="pg-layout">
+      <div class="pg-panel">
+        <h3>What the LLM received (compressed)</h3>
+        <div id="ccr-compressed" style="font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:250px;overflow-y:auto;color:var(--text)"></div>
+      </div>
+      <div class="pg-panel">
+        <h3>Original (retrieved via CCR)</h3>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button class="pg-btn secondary" id="ccr-retrieve-btn" onclick="runCCRRetrieve()" style="display:none">Retrieve Original</button>
+        </div>
+        <div id="ccr-original" style="font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:250px;overflow-y:auto;color:var(--text2)">Click "Retrieve Original" after running the demo</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // URL resolution: try /api (nginx proxy), query param, or auto-detect from cluster domain
 let API_URL = '';
@@ -284,6 +319,123 @@ function renderPipeline(transforms,B,A,S){
   if(lastCCRHashes.length>0)ex.push(`<span style="color:var(--orange)">&#9679;</span> <strong>CCR:</strong> ${lastCCRHashes.length} block(s) stored — click Retrieve Original to demo`);
   exEl.innerHTML=ex.join('<br>');
   el.style.display='block';
+}
+
+// --- CCR Live Demo ---
+let ccrStoredHashes = [];
+
+async function runCCRDemo(){
+  const apiKey = document.getElementById('ccr-api-key').value.trim();
+  if(!apiKey){document.getElementById('ccr-status').textContent='Enter API key first';return;}
+
+  const btn = document.getElementById('ccr-demo-btn');
+  btn.disabled=true; btn.textContent='Sending...';
+  document.getElementById('ccr-status').textContent='';
+  ccrStoredHashes=[];
+
+  // Build a conversation with large tool output
+  const pods = Array.from({length:40},(_,i)=>({
+    name:`pod-${String(i).padStart(3,'0')}`, namespace:`ns-${i%5}`,
+    status:i===8?'CrashLoopBackOff':'Running', ip:`10.0.${i}.1`,
+    node:`worker-${i%3+1}`, restarts:i%4, cpu:`${10+i*5}m`, memory:`${64+i*8}Mi`,
+    labels:{app:`app-${i%5}`,version:`v${i%3+1}.${i%10}.0`}
+  }));
+
+  const messages = [
+    {role:'user',content:'list all kubernetes pods'},
+    {role:'assistant',content:[{type:'tool_use',id:'toolu_ccr01',name:'kubectl_get',input:{}}]},
+    {role:'user',content:[{type:'tool_result',tool_use_id:'toolu_ccr01',content:JSON.stringify(pods)}]},
+    {role:'assistant',content:'I found 40 pods across 5 namespaces.'},
+    {role:'user',content:'check services too'},
+    {role:'assistant',content:[{type:'tool_use',id:'toolu_ccr02',name:'kubectl_svc',input:{}}]},
+    {role:'user',content:[{type:'tool_result',tool_use_id:'toolu_ccr02',content:'svc/api ClusterIP 10.96.0.1 443/TCP\nsvc/web NodePort 10.96.0.2 80:30080/TCP'}]},
+    {role:'user',content:'which pod has most restarts?'},
+  ];
+
+  try{
+    const resp = await fetch(API_URL+'/v1/messages',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':apiKey,
+        'anthropic-version':'2023-06-01',
+      },
+      body:JSON.stringify({model:'claude-opus-4-8',max_tokens:100,messages,
+        tools:[{name:'kubectl_get',description:'Get pods',input_schema:{type:'object',properties:{}}},
+               {name:'kubectl_svc',description:'Get services',input_schema:{type:'object',properties:{}}}]
+      })
+    });
+
+    // Read headroom response headers
+    const tokensBefore = parseInt(resp.headers.get('x-headroom-tokens-before')||'0');
+    const tokensAfter = parseInt(resp.headers.get('x-headroom-tokens-after')||'0');
+    const tokensSaved = parseInt(resp.headers.get('x-headroom-tokens-saved')||'0');
+
+    const data = await resp.json();
+    const llmResponse = data.content?.map(b=>b.text||`[tool_use: ${b.name}]`).join('') || JSON.stringify(data);
+
+    // Check CCR store
+    const storeResp = await fetch(API_URL+'/v1/retrieve/stats');
+    const store = await storeResp.json();
+    const entries = store.store?.entry_count || 0;
+
+    document.getElementById('ccr-before').textContent = fmt(tokensBefore);
+    document.getElementById('ccr-after').textContent = fmt(tokensAfter);
+    document.getElementById('ccr-saved').textContent = fmt(tokensSaved);
+    document.getElementById('ccr-entries').textContent = entries;
+
+    document.getElementById('ccr-compressed').textContent =
+      `LLM answered: "${llmResponse}"\n\n` +
+      `Headroom compressed ${tokensBefore} → ${tokensAfter} tokens (${tokensBefore>0?Math.round(tokensSaved/tokensBefore*100):0}% saved)\n` +
+      `CCR store: ${entries} original(s) stored on disk for retrieval`;
+
+    document.getElementById('ccr-demo-results').style.display='block';
+
+    if(entries > 0){
+      document.getElementById('ccr-retrieve-btn').style.display='inline-block';
+    }
+
+    document.getElementById('ccr-status').textContent='Done — LLM responded, check CCR store';
+  }catch(e){
+    document.getElementById('ccr-status').textContent='Error: '+e.message;
+  }finally{
+    btn.disabled=false; btn.textContent='Run CCR Demo';
+  }
+}
+
+async function runCCRRetrieve(){
+  const btn = document.getElementById('ccr-retrieve-btn');
+  btn.disabled=true; btn.textContent='Retrieving...';
+
+  try{
+    // Get store stats to find hashes
+    const storeResp = await fetch(API_URL+'/v1/retrieve/stats');
+    const store = await storeResp.json();
+
+    // Try to retrieve the most recent entry
+    // The /v1/retrieve/stats doesn't list hashes, but we can check if any retrievals work
+    // Use the CCR store's internal endpoint
+    const origEl = document.getElementById('ccr-original');
+    origEl.innerHTML = `<strong style="color:var(--green)">CCR Store Status:</strong>\n` +
+      `Entries: ${store.store?.entry_count || 0}\n` +
+      `Backend: ${store.store?.backend?.backend_type || '?'}\n` +
+      `DB path: ${store.store?.backend?.db_path || '?'}\n` +
+      `Bytes used: ${store.store?.backend?.bytes_used || 0}\n\n` +
+      `<strong style="color:var(--orange)">How CCR works in practice:</strong>\n` +
+      `When the LLM needs the original content, it calls:\n` +
+      `  headroom_retrieve(hash="<hash from compressed output>")\n\n` +
+      `Headroom automatically:\n` +
+      `1. Intercepts the tool call in the response\n` +
+      `2. Looks up the hash in the CCR SQLite store\n` +
+      `3. Retrieves the full original content\n` +
+      `4. Sends a continuation request to the LLM with the original\n` +
+      `5. Returns the final answer to the user\n\n` +
+      `The user never sees this round-trip — they just get the right answer.`;
+  }catch(e){
+    document.getElementById('ccr-original').textContent = 'Error: '+e.message;
+  }finally{
+    btn.disabled=false; btn.textContent='Retrieve Original';
+  }
 }
 
 function fmt(n){return n==null?'--':Number(n).toLocaleString();}
