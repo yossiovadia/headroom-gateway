@@ -72,7 +72,7 @@ header h1{font-size:22px;font-weight:600;color:var(--cyan)}
     <option value="">Select a sample...</option>
     <option value="k8s-pods">Kubernetes Pods (40 pods, JSON) — SmartCrusher + CCR</option>
     <option value="build-logs">Build Logs (50 lines) — SearchCompressor</option>
-    <option value="source-code">Python Source Code (~40 functions) — Kompress ML</option>
+
     <option value="api-response">API Search Results (30 items) — Mixed</option>
     <option value="docs-prose">Documentation (20 sections) — Kompress ML (text)</option>
     <option value="error-logs">Error Logs — Protected (no compression)</option>
@@ -197,7 +197,6 @@ checkConnection();
 const PRESETS={
   'k8s-pods':JSON.stringify(Array.from({length:40},(_,i)=>({name:`pod-${String(i).padStart(3,'0')}`,namespace:`ns-${i%5}`,status:i===8?'CrashLoopBackOff':'Running',ip:`10.0.${i}.1`,node:`worker-${i%3+1}.cluster.local`,restarts:i%4,age:`${i+1}d`,cpu:`${10+i*5}m`,memory:`${64+i*8}Mi`,labels:{app:`app-${i%5}`,version:`v${i%3+1}.${i%10}.0`,tier:['frontend','backend','data'][i%3]}})),null,2),
   'build-logs':Array.from({length:50},(_,i)=>{const ts=`2026-06-29T08:${String(Math.floor(i/60)).padStart(2,'0')}:${String(i%60).padStart(2,'0')}Z`;if(i<15)return`${ts} [INFO] Installing package-${i}==${i}.0.${i}`;if(i<35)return`${ts} [TEST] test_${['health','auth','users','orders','payments','search','cache','metrics','rate','notify'][i%10]}_${['list','create','update','delete'][i%4]} ... PASSED (${(0.02+i*0.03).toFixed(2)}s)`;if(i<45)return`${ts} [BUILD] STEP ${i-35+1}/10: ${['FROM python','COPY req','RUN pip','COPY src','COPY config','COPY migrations','RUN pytest','WORKDIR','EXPOSE','CMD uvicorn'][i-35]}`;return`${ts} [INFO] Pipeline step ${i} done`}).join('\n'),
-  'source-code':Array.from({length:40},(_,i)=>`def function_${i}(x, y, z=None, timeout=30):\n    """Process item ${i}."""\n    if x is None:\n        raise ValueError("x required")\n    result = x * ${i+1} + y * ${i+2}\n    if z: result += z * ${i+3}\n    logger.info(f"function_${i}: {result}")\n    return {"value": result, "fn": "function_${i}", "ok": True}\n`).join('\n'),
   'docs-prose':Array.from({length:20},(_,i)=>`Config parameter ${i} for module ${i%5} defaults to ${i*10}. Controls pipeline behavior. Values above ${i*50} enable batching for improved throughput and efficiency.`).join('\n\n'),
   'api-response':JSON.stringify({query:"kubernetes best practices",results:Array.from({length:30},(_,i)=>({title:`Result ${i+1}: ${['Orchestration','Scheduling','Resources','Network','Service mesh','Updates','Health','Volumes','ConfigMap','Secrets'][i%10]}`,url:`https://docs.example.com/${i+1}`,snippet:`Covers ${['optimization','practices','pitfalls','techniques','intro'][i%5]} for ${['deploy','lifecycle','alloc','security','discovery'][i%5]}.`,score:0.95-i*0.02})),total:2847},null,2),
   'error-logs':'2026-06-29T10:00:00Z [INFO] Processing batch 1\n2026-06-29T10:00:01Z [INFO] Processing batch 2\n2026-06-29T10:00:05Z [ERROR] Connection refused to database\n2026-06-29T10:00:06Z [ERROR] Retrying 1/3...\n2026-06-29T10:00:07Z [ERROR] Connection refused\n2026-06-29T10:00:08Z [ERROR] Retrying 2/3...\n2026-06-29T10:00:09Z [ERROR] Connection refused\n2026-06-29T10:00:10Z [FATAL] Unable to connect after 3 retries\n2026-06-29T10:00:10Z Process exited with code 1'
