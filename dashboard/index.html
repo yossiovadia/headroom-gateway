@@ -159,15 +159,23 @@ header h1{font-size:22px;font-weight:600;color:var(--cyan)}
 let API_URL = '';
 const params = new URLSearchParams(window.location.search);
 
-function detectApiUrl() {
-  const fromParam = params.get('url') || params.get('proxy_url') || '';
-  if (fromParam) return fromParam;
-  // Try /api path (nginx reverse proxy to headroom-proxy)
-  return window.location.origin + '/api';
-}
+API_URL = window.location.origin + '/api';
 
-API_URL = detectApiUrl();
 async function checkConnection() {
+  // Try /api first (nginx proxy), then fall back to ?url param
+  const candidates = [
+    window.location.origin + '/api',
+    params.get('url'),
+    params.get('proxy_url'),
+  ].filter(Boolean);
+
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url + '/readyz', {signal: AbortSignal.timeout(3000)});
+      if (r.ok) { API_URL = url; break; }
+    } catch(e) {}
+  }
+  // Now check the chosen API_URL
   try {
     const r = await fetch(API_URL + '/readyz', {signal: AbortSignal.timeout(5000)});
     const d = await r.json();
