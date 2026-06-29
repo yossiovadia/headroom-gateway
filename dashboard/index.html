@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Headroom Compression</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<title>Headroom Playground</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -12,16 +11,17 @@
   --text:#e0e3e8;--text2:#8b949e;--blue:#58a6ff;--green:#3fb950;
   --orange:#d29922;--red:#f85149;--purple:#bc8cff;--cyan:#39d2c0;
 }
-body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:0}
-.tabs{display:flex;gap:4px;padding:12px 20px}
-.tabs a{background:var(--bg-card);color:var(--text2);border:1px solid var(--border);padding:8px 20px;border-radius:6px;font-size:14px;text-decoration:none;cursor:pointer;transition:all .2s}
-.tabs a:hover{background:var(--bg-hover);color:var(--text)}
-.tabs a.active{background:var(--cyan);color:#fff;border-color:var(--cyan)}
-.tab-content{display:none}.tab-content.active{display:block}
-iframe{width:100%;border:none;min-height:calc(100vh - 60px)}
-
-/* Playground styles */
-.pg-wrap{padding:20px;max-width:1400px;margin:0 auto}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:20px;max-width:1400px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px}
+header h1{font-size:22px;font-weight:600;color:var(--cyan)}
+.header-link{background:var(--bg-card);color:var(--cyan);border:1px solid var(--cyan);padding:8px 20px;border-radius:6px;font-size:13px;text-decoration:none;transition:all .2s}
+.header-link:hover{background:var(--cyan);color:#fff}
+.config-bar{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.config-bar label{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;font-weight:600;flex-shrink:0}
+.config-bar input{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;font-size:13px;font-family:inherit;flex:1;min-width:200px}
+.config-bar input:focus{outline:none;border-color:var(--cyan)}
+.config-bar button{background:var(--bg-card);color:var(--text2);border:1px solid var(--border);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+.config-bar button:hover{background:var(--bg-hover);color:var(--text)}
 .pg-controls{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
 .pg-btn{background:var(--cyan);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .2s}
 .pg-btn:hover{opacity:.85}
@@ -30,14 +30,15 @@ iframe{width:100%;border:none;min-height:calc(100vh - 60px)}
 .pg-btn.secondary:hover{background:var(--bg-hover);color:var(--text)}
 .pg-select{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px;cursor:pointer}
 .pg-results{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+@media(max-width:600px){.pg-results{grid-template-columns:repeat(2,1fr)}}
 .pg-stat{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
 .pg-stat-label{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
 .pg-stat-value{font-size:24px;font-weight:700}
 .pg-layout{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
-@media(max-width:900px){.pg-layout{grid-template-columns:1fr}.pg-results{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:900px){.pg-layout{grid-template-columns:1fr}}
 .pg-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px;display:flex;flex-direction:column}
 .pg-panel h3{font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;font-weight:600}
-.pg-textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.5;resize:vertical;min-height:300px;width:100%;flex:1}
+.pg-textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.5;resize:vertical;min-height:280px;width:100%;flex:1}
 .pg-textarea:focus{outline:none;border-color:var(--cyan)}
 .pg-textarea[readonly]{color:var(--text2)}
 .pg-stage{display:flex;align-items:flex-start;gap:12px;padding:8px 0;position:relative}
@@ -50,110 +51,125 @@ iframe{width:100%;border:none;min-height:calc(100vh - 60px)}
 .pg-stage-name.skipped{color:var(--text2)}
 .pg-stage-detail{font-size:12px;color:var(--text2);margin-top:2px}
 .pg-stage-savings{font-size:12px;color:var(--green);font-weight:600;margin-top:2px}
-.ccr-section{margin-top:16px}
 .ccr-hash{background:var(--bg);border:1px solid var(--green);border-radius:6px;padding:8px 12px;font-family:monospace;font-size:12px;color:var(--green);display:inline-block;margin:4px}
 .ccr-retrieved{background:var(--bg);border:1px solid var(--orange);border-radius:8px;padding:12px;font-family:monospace;font-size:11px;max-height:200px;overflow-y:auto;margin-top:8px;color:var(--text);white-space:pre-wrap}
 </style>
 </head>
 <body>
-<div class="tabs">
-  <a href="#" id="tab-dashboard" class="active" onclick="switchTab('dashboard')">Dashboard</a>
-  <a href="#" id="tab-playground" onclick="switchTab('playground')">Playground</a>
+
+<header>
+  <h1>Headroom Playground</h1>
+  <a id="dashboard-link" href="#" target="_blank" class="header-link">Open Dashboard &#8599;</a>
+</header>
+
+<div class="config-bar">
+  <label>Headroom Proxy</label>
+  <input type="text" id="proxy-url" placeholder="https://headroom-proxy-...">
+  <button onclick="applyUrl()">Connect</button>
+  <span id="status" style="color:var(--text2);font-size:12px"></span>
 </div>
 
-<div id="view-dashboard" class="tab-content active">
-  <iframe id="dashboard-frame" src=""></iframe>
+<div class="pg-controls">
+  <select id="pg-preset" class="pg-select" onchange="loadPreset()">
+    <option value="">Select a sample...</option>
+    <option value="k8s-pods">Kubernetes Pods (40 pods, JSON) — SmartCrusher + CCR</option>
+    <option value="build-logs">Build Logs (50 lines) — SearchCompressor</option>
+    <option value="source-code">Python Source Code (~40 functions) — Kompress ML</option>
+    <option value="api-response">API Search Results (30 items) — Mixed</option>
+    <option value="docs-prose">Documentation (20 sections) — Kompress ML (text)</option>
+    <option value="error-logs">Error Logs — Protected (no compression)</option>
+  </select>
+  <button class="pg-btn" id="pg-compress-btn" onclick="runPlayground()">Compress</button>
+  <button class="pg-btn secondary" id="pg-retrieve-btn" onclick="retrieveCCR()" style="display:none">Retrieve Original (CCR)</button>
+  <span id="pg-status" style="color:var(--text2);font-size:12px"></span>
 </div>
 
-<div id="view-playground" class="tab-content">
-  <div class="pg-wrap">
-    <div class="pg-controls">
-      <select id="pg-preset" class="pg-select" onchange="loadPreset()">
-        <option value="">Select a sample...</option>
-        <option value="k8s-pods">Kubernetes Pods (40 pods, JSON) — SmartCrusher + CCR</option>
-        <option value="build-logs">Build Logs (50 lines) — SearchCompressor</option>
-        <option value="source-code">Python Source Code (~40 functions) — Kompress ML</option>
-        <option value="api-response">API Search Results (30 items) — Mixed</option>
-        <option value="docs-prose">Documentation (20 sections) — Kompress ML (text)</option>
-        <option value="error-logs">Error Logs — Protected (no compression)</option>
-      </select>
-      <button class="pg-btn" id="pg-compress-btn" onclick="runPlayground()">Compress</button>
-      <button class="pg-btn secondary" id="pg-retrieve-btn" onclick="retrieveCCR()" style="display:none">Retrieve Original (CCR)</button>
-      <span id="pg-status" style="color:var(--text2);font-size:12px"></span>
-    </div>
+<div class="pg-results" id="pg-results" style="display:none">
+  <div class="pg-stat"><div class="pg-stat-label">Tokens Before</div><div class="pg-stat-value" style="color:var(--cyan)" id="pg-before">--</div></div>
+  <div class="pg-stat"><div class="pg-stat-label">Tokens After</div><div class="pg-stat-value" style="color:var(--green)" id="pg-after">--</div></div>
+  <div class="pg-stat"><div class="pg-stat-label">Tokens Saved</div><div class="pg-stat-value" style="color:var(--orange)" id="pg-saved">--</div></div>
+  <div class="pg-stat"><div class="pg-stat-label">Savings</div><div class="pg-stat-value" style="color:var(--purple)" id="pg-pct">--</div></div>
+</div>
 
-    <div class="pg-results" id="pg-results" style="display:none">
-      <div class="pg-stat"><div class="pg-stat-label">Tokens Before</div><div class="pg-stat-value" style="color:var(--cyan)" id="pg-before">--</div></div>
-      <div class="pg-stat"><div class="pg-stat-label">Tokens After</div><div class="pg-stat-value" style="color:var(--green)" id="pg-after">--</div></div>
-      <div class="pg-stat"><div class="pg-stat-label">Tokens Saved</div><div class="pg-stat-value" style="color:var(--orange)" id="pg-saved">--</div></div>
-      <div class="pg-stat"><div class="pg-stat-label">Savings</div><div class="pg-stat-value" style="color:var(--purple)" id="pg-pct">--</div></div>
-    </div>
+<div class="pg-layout">
+  <div class="pg-panel">
+    <h3>Input (Original Tool Output)</h3>
+    <textarea class="pg-textarea" id="pg-input" placeholder="Paste content here or select a sample above..."></textarea>
+  </div>
+  <div class="pg-panel">
+    <h3>Output (After Compression)</h3>
+    <textarea class="pg-textarea" id="pg-output" readonly placeholder="Compressed output will appear here..."></textarea>
+  </div>
+</div>
 
-    <div class="pg-layout">
-      <div class="pg-panel">
-        <h3>Input (Original Tool Output)</h3>
-        <textarea class="pg-textarea" id="pg-input" placeholder="Paste content here or select a sample above..."></textarea>
-      </div>
-      <div class="pg-panel">
-        <h3>Output (After Compression)</h3>
-        <textarea class="pg-textarea" id="pg-output" readonly placeholder="Compressed output will appear here..."></textarea>
-      </div>
+<div id="pg-pipeline" style="display:none">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div class="pg-panel">
+      <h3>Compression Pipeline</h3>
+      <div id="pg-pipeline-stages"></div>
     </div>
-
-    <div id="pg-pipeline" style="display:none">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div class="pg-panel">
-          <h3>Compression Pipeline</h3>
-          <div id="pg-pipeline-stages"></div>
-        </div>
-        <div class="pg-panel">
-          <h3>What Happened</h3>
-          <div id="pg-pipeline-explain" style="padding:8px 0;font-size:13px;line-height:1.8;color:var(--text)"></div>
-          <div class="ccr-section" id="pg-ccr-section" style="display:none">
-            <h3 style="margin-top:12px">CCR (Compress-Cache-Retrieve)</h3>
-            <div id="pg-ccr-info" style="font-size:13px;color:var(--text);padding:8px 0"></div>
-            <div id="pg-ccr-hashes"></div>
-            <div id="pg-ccr-retrieved"></div>
-          </div>
-        </div>
+    <div class="pg-panel">
+      <h3>What Happened</h3>
+      <div id="pg-pipeline-explain" style="padding:8px 0;font-size:13px;line-height:1.8;color:var(--text)"></div>
+      <div id="pg-ccr-section" style="display:none;margin-top:12px">
+        <h3>CCR (Compress-Cache-Retrieve)</h3>
+        <div id="pg-ccr-info" style="font-size:13px;color:var(--text);padding:8px 0"></div>
+        <div id="pg-ccr-hashes"></div>
+        <div id="pg-ccr-retrieved"></div>
       </div>
     </div>
   </div>
 </div>
 
 <script>
-// Resolve URLs from query params or cluster domain
+// URL resolution: try /api (nginx proxy), query param, or auto-detect from cluster domain
+let API_URL = '';
 const params = new URLSearchParams(window.location.search);
-const clusterDomain = window.location.hostname.split('.apps.')[1] || '';
-// For API calls: use /api prefix (nginx proxies to headroom-proxy, avoids CORS)
-// For dashboard iframe: use direct proxy URL
-const directProxyUrl = params.get('url') || params.get('proxy_url') || ('https://headroom-proxy-openshift-ingress.apps.' + clusterDomain);
-let PROXY_URL = window.location.origin + '/api';
 
-// Dashboard tab: embed proxy's built-in dashboard
-document.getElementById('dashboard-frame').src = directProxyUrl + '/dashboard';
-
-function switchTab(tab){
-  document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
-  document.querySelectorAll('.tabs a').forEach(el=>el.classList.remove('active'));
-  document.getElementById('view-'+tab).classList.add('active');
-  document.getElementById('tab-'+tab).classList.add('active');
+function detectApiUrl() {
+  const fromParam = params.get('url') || params.get('proxy_url') || '';
+  if (fromParam) return fromParam;
+  // Try /api path (nginx reverse proxy to headroom-proxy)
+  return window.location.origin + '/api';
 }
 
-// --- Playground presets ---
+API_URL = detectApiUrl();
+document.getElementById('proxy-url').value = API_URL.replace('/api', '').replace(window.location.origin, '(via nginx proxy)');
+
+function applyUrl() {
+  const val = document.getElementById('proxy-url').value.trim();
+  if (val && !val.startsWith('(')) {
+    API_URL = val.replace(/\/+$/, '');
+  }
+  checkConnection();
+}
+
+async function checkConnection() {
+  try {
+    const r = await fetch(API_URL + '/readyz', {signal: AbortSignal.timeout(5000)});
+    const d = await r.json();
+    document.getElementById('status').textContent = d.status === 'healthy' ? 'connected' : 'unhealthy';
+    document.getElementById('status').style.color = d.status === 'healthy' ? 'var(--green)' : 'var(--red)';
+    // Update dashboard link
+    const dashUrl = API_URL.replace('/api', '') === window.location.origin
+      ? API_URL.replace('/api', '/api/dashboard')
+      : API_URL + '/dashboard';
+    document.getElementById('dashboard-link').href = dashUrl;
+  } catch(e) {
+    document.getElementById('status').textContent = 'disconnected';
+    document.getElementById('status').style.color = 'var(--red)';
+  }
+}
+checkConnection();
+
+// --- Presets ---
 const PRESETS={
   'k8s-pods':JSON.stringify(Array.from({length:40},(_,i)=>({name:`pod-${String(i).padStart(3,'0')}`,namespace:`ns-${i%5}`,status:i===8?'CrashLoopBackOff':'Running',ip:`10.0.${i}.1`,node:`worker-${i%3+1}.cluster.local`,restarts:i%4,age:`${i+1}d`,cpu:`${10+i*5}m`,memory:`${64+i*8}Mi`,labels:{app:`app-${i%5}`,version:`v${i%3+1}.${i%10}.0`,tier:['frontend','backend','data'][i%3]}})),null,2),
-  'build-logs':Array.from({length:50},(_,i)=>{
-    const ts=`2026-06-29T08:${String(Math.floor(i/60)).padStart(2,'0')}:${String(i%60).padStart(2,'0')}Z`;
-    if(i<15)return`${ts} [INFO] Installing package-${i}==${i}.0.${i}`;
-    if(i<35)return`${ts} [TEST] test_api_${['health','auth','users','orders','payments','search','cache','metrics','rate','notify'][i%10]}_${['list','create','update','delete'][i%4]} ... PASSED (${(0.02+i*0.03).toFixed(2)}s)`;
-    if(i<45)return`${ts} [BUILD] STEP ${i-35+1}/10: ${['FROM python:3.12-slim','COPY requirements.txt','RUN pip install','COPY src/','COPY config/','COPY migrations/','RUN pytest','WORKDIR /app','EXPOSE 8080','CMD uvicorn'][i-35]}`;
-    return`${ts} [INFO] Pipeline step ${i} completed`;
-  }).join('\n'),
-  'source-code':Array.from({length:40},(_,i)=>`def function_${i}(x, y, z=None, timeout=30, retries=3):\n    """Process item ${i} with validation and error handling."""\n    if x is None or y is None:\n        raise ValueError("Parameters x and y are required for function_${i}")\n    result = x * ${i+1} + y * ${i+2}\n    if z is not None:\n        result += z * ${i+3}\n    logger.info(f"function_${i} computed result={result} from x={x} y={y}")\n    return {"value": result, "function": "function_${i}", "status": "success"}\n`).join('\n'),
-  'docs-prose':Array.from({length:20},(_,i)=>`The configuration parameter number ${i} for the system module ${i%5} has a default value of ${i*10} and controls the behavior of the processing pipeline subsystem. When this parameter is set to values higher than ${i*50} the system automatically enables the batching optimization mode which significantly improves the overall throughput and efficiency of the data processing pipeline.`).join('\n\n'),
-  'api-response':JSON.stringify({query:"kubernetes deployment best practices",results:Array.from({length:30},(_,i)=>({title:`Result ${i+1}: ${['Container orchestration','Pod scheduling','Resource management','Network policy','Service mesh','Rolling updates','Health checks','Persistent volumes','ConfigMap','Secret management'][i%10]}`,url:`https://docs.example.com/k8s/article-${i+1}`,snippet:`This covers ${['optimization','best practices','pitfalls','techniques','getting started'][i%5]} for ${['deployment','lifecycle','allocation','security','discovery'][i%5]} in Kubernetes.`,score:0.95-i*0.02,words:1200+i*150})),total:2847},null,2),
-  'error-logs':`2026-06-29T10:00:00Z [INFO] Processing batch 1\n2026-06-29T10:00:01Z [INFO] Processing batch 2\n2026-06-29T10:00:02Z [INFO] Processing batch 3\n2026-06-29T10:00:03Z [WARN] Slow query: 2.3s\n2026-06-29T10:00:04Z [INFO] Processing batch 4\n2026-06-29T10:00:05Z [ERROR] Connection refused to database at 10.0.2.1:5432\n2026-06-29T10:00:06Z [ERROR] Retrying 1/3...\n2026-06-29T10:00:07Z [ERROR] Connection refused\n2026-06-29T10:00:08Z [ERROR] Retrying 2/3...\n2026-06-29T10:00:09Z [ERROR] Connection refused\n2026-06-29T10:00:10Z [FATAL] Unable to connect after 3 retries\n2026-06-29T10:00:10Z [FATAL] Service shutting down\n2026-06-29T10:00:10Z Process exited with code 1`
+  'build-logs':Array.from({length:50},(_,i)=>{const ts=`2026-06-29T08:${String(Math.floor(i/60)).padStart(2,'0')}:${String(i%60).padStart(2,'0')}Z`;if(i<15)return`${ts} [INFO] Installing package-${i}==${i}.0.${i}`;if(i<35)return`${ts} [TEST] test_${['health','auth','users','orders','payments','search','cache','metrics','rate','notify'][i%10]}_${['list','create','update','delete'][i%4]} ... PASSED (${(0.02+i*0.03).toFixed(2)}s)`;if(i<45)return`${ts} [BUILD] STEP ${i-35+1}/10: ${['FROM python','COPY req','RUN pip','COPY src','COPY config','COPY migrations','RUN pytest','WORKDIR','EXPOSE','CMD uvicorn'][i-35]}`;return`${ts} [INFO] Pipeline step ${i} done`}).join('\n'),
+  'source-code':Array.from({length:40},(_,i)=>`def function_${i}(x, y, z=None, timeout=30):\n    """Process item ${i}."""\n    if x is None:\n        raise ValueError("x required")\n    result = x * ${i+1} + y * ${i+2}\n    if z: result += z * ${i+3}\n    logger.info(f"function_${i}: {result}")\n    return {"value": result, "fn": "function_${i}", "ok": True}\n`).join('\n'),
+  'docs-prose':Array.from({length:20},(_,i)=>`Config parameter ${i} for module ${i%5} defaults to ${i*10}. Controls pipeline behavior. Values above ${i*50} enable batching for improved throughput and efficiency.`).join('\n\n'),
+  'api-response':JSON.stringify({query:"kubernetes best practices",results:Array.from({length:30},(_,i)=>({title:`Result ${i+1}: ${['Orchestration','Scheduling','Resources','Network','Service mesh','Updates','Health','Volumes','ConfigMap','Secrets'][i%10]}`,url:`https://docs.example.com/${i+1}`,snippet:`Covers ${['optimization','practices','pitfalls','techniques','intro'][i%5]} for ${['deploy','lifecycle','alloc','security','discovery'][i%5]}.`,score:0.95-i*0.02})),total:2847},null,2),
+  'error-logs':'2026-06-29T10:00:00Z [INFO] Processing batch 1\n2026-06-29T10:00:01Z [INFO] Processing batch 2\n2026-06-29T10:00:05Z [ERROR] Connection refused to database\n2026-06-29T10:00:06Z [ERROR] Retrying 1/3...\n2026-06-29T10:00:07Z [ERROR] Connection refused\n2026-06-29T10:00:08Z [ERROR] Retrying 2/3...\n2026-06-29T10:00:09Z [ERROR] Connection refused\n2026-06-29T10:00:10Z [FATAL] Unable to connect after 3 retries\n2026-06-29T10:00:10Z Process exited with code 1'
 };
 
 let lastCCRHashes = [];
@@ -179,35 +195,28 @@ async function runPlayground(){
   document.getElementById('pg-retrieve-btn').style.display='none';
   lastCCRHashes=[];
 
-  // Use /v1/compress endpoint (utility, not full proxy flow)
-  // This still uses the full compression pipeline
   const messages=[
     {role:'user',content:'show data'},
     {role:'assistant',content:null,tool_calls:[{id:'c1',type:'function',function:{name:'tool_output',arguments:'{}'}}]},
     {role:'tool',tool_call_id:'c1',content:input},
-    {role:'user',content:'analyze'},
-    {role:'assistant',content:'processing'},
-    {role:'user',content:'continue'},
-    {role:'assistant',content:'ok'},
-    {role:'user',content:'more'},
-    {role:'assistant',content:'done'},
+    {role:'user',content:'analyze'},{role:'assistant',content:'processing'},
+    {role:'user',content:'continue'},{role:'assistant',content:'ok'},
+    {role:'user',content:'more'},{role:'assistant',content:'done'},
     {role:'user',content:'summarize'},
   ];
 
   try{
     const t0=performance.now();
-    const resp=await fetch(PROXY_URL+'/v1/compress',{
+    const resp=await fetch(API_URL+'/v1/compress',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({messages,model:'playground-demo'}),
+      body:JSON.stringify({messages,model:'playground-demo'})
     });
     const ms=Math.round(performance.now()-t0);
     const d=await resp.json();
-
     const toolOut=d.messages.find(m=>m.role==='tool');
     const outputText=toolOut?toolOut.content:'(no tool output)';
     document.getElementById('pg-output').value=outputText;
-
     document.getElementById('pg-before').textContent=fmt(d.tokens_before);
     document.getElementById('pg-after').textContent=fmt(d.tokens_after);
     document.getElementById('pg-saved').textContent=fmt(d.tokens_saved);
@@ -215,107 +224,78 @@ async function runPlayground(){
     document.getElementById('pg-pct').textContent=pct+'%';
     document.getElementById('pg-results').style.display='grid';
 
-    // Check for CCR hashes in output
     const hashMatches=outputText.match(/hash[=:][\s]*([a-f0-9]+)/gi)||[];
     lastCCRHashes=hashMatches.map(m=>m.replace(/hash[=:]\s*/i,''));
-
     renderPipeline(d.transforms_applied||[],d.tokens_before,d.tokens_after,d.tokens_saved);
-
-    // Show CCR section if hashes found
     if(lastCCRHashes.length>0){
       document.getElementById('pg-ccr-section').style.display='block';
-      document.getElementById('pg-ccr-info').innerHTML=
-        `<strong>${lastCCRHashes.length} compressed block(s)</strong> stored in CCR. The LLM can call <code>headroom_retrieve</code> to get the originals back.`;
-      document.getElementById('pg-ccr-hashes').innerHTML=lastCCRHashes.map(h=>
-        `<span class="ccr-hash">hash: ${h}</span>`).join('');
+      document.getElementById('pg-ccr-info').innerHTML=`<strong>${lastCCRHashes.length} block(s)</strong> stored in CCR. Click "Retrieve Original" to get the full content back.`;
+      document.getElementById('pg-ccr-hashes').innerHTML=lastCCRHashes.map(h=>`<span class="ccr-hash">hash: ${h}</span>`).join('');
       document.getElementById('pg-ccr-retrieved').innerHTML='';
       document.getElementById('pg-retrieve-btn').style.display='inline-block';
     }
-
     document.getElementById('pg-status').textContent=ms+'ms';
   }catch(e){
     document.getElementById('pg-status').textContent='Error: '+e.message;
-    console.error('Playground error:',e);
   }finally{
     btn.disabled=false;btn.textContent='Compress';
   }
 }
 
 async function retrieveCCR(){
-  if(lastCCRHashes.length===0)return;
+  if(!lastCCRHashes.length)return;
   const btn=document.getElementById('pg-retrieve-btn');
   btn.disabled=true;btn.textContent='Retrieving...';
-
+  const container=document.getElementById('pg-ccr-retrieved');
   const results=[];
   for(const hash of lastCCRHashes){
     try{
-      const resp=await fetch(PROXY_URL+'/v1/retrieve',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({hash})
-      });
-      const d=await resp.json();
-      results.push({hash,data:d});
-    }catch(e){
-      results.push({hash,error:e.message});
-    }
+      const resp=await fetch(API_URL+'/v1/retrieve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hash})});
+      results.push({hash,data:await resp.json()});
+    }catch(e){results.push({hash,error:e.message});}
   }
-
-  const container=document.getElementById('pg-ccr-retrieved');
   container.innerHTML=results.map(r=>{
-    if(r.error)return`<div class="ccr-retrieved" style="border-color:var(--red)">Hash ${r.hash}: Error — ${r.error}</div>`;
-    const content=r.data.original_content||r.data.content||JSON.stringify(r.data,null,2);
-    const preview=content.length>500?content.substring(0,500)+'...(truncated)':content;
-    return`<div style="margin-top:8px"><strong style="color:var(--orange)">Retrieved (hash: ${r.hash.substring(0,12)}...)</strong>
-      <span style="color:var(--text2);font-size:11px"> — ${r.data.original_item_count||'?'} items, retrieval #${r.data.retrieval_count||1}</span></div>
-      <div class="ccr-retrieved">${preview.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`;
+    if(r.error)return`<div class="ccr-retrieved" style="border-color:var(--red)">Error: ${r.error}</div>`;
+    const content=r.data.original_content||JSON.stringify(r.data,null,2);
+    const preview=content.length>500?content.substring(0,500)+'... (truncated)':content;
+    return`<div style="margin-top:8px"><strong style="color:var(--orange)">Original (hash: ${r.hash.substring(0,12)}...)</strong><span style="color:var(--text2);font-size:11px"> — ${r.data.original_item_count||'?'} items</span></div><div class="ccr-retrieved">${preview.replace(/</g,'&lt;')}</div>`;
   }).join('');
-
   btn.disabled=false;btn.textContent='Retrieve Original (CCR)';
 }
 
-function renderPipeline(transforms,tokensBefore,tokensAfter,tokensSaved){
+function renderPipeline(transforms,B,A,S){
   const el=document.getElementById('pg-pipeline');
-  const stagesEl=document.getElementById('pg-pipeline-stages');
-  const explainEl=document.getElementById('pg-pipeline-explain');
+  const stEl=document.getElementById('pg-pipeline-stages');
+  const exEl=document.getElementById('pg-pipeline-explain');
   const active=new Set();
   transforms.forEach(t=>{
     if(t.includes('smart_crusher'))active.add('smart_crusher');
-    else if(t.includes('router:search'))active.add('search');
-    else if(t.includes('router:text'))active.add('kompress');
-    else if(t.includes('router:kompress'))active.add('kompress');
+    else if(t.includes('router:search')||t.includes('tool_result:search'))active.add('search');
+    else if(t.includes('router:text')||t.includes('router:kompress'))active.add('kompress');
     else if(t.includes('router:mixed')){active.add('smart_crusher');active.add('kompress');}
     else if(t.includes('router:code'))active.add('code');
   });
   const stages=[
     {id:'router',name:'ContentRouter',desc:'Detects content type',always:true},
-    {id:'smart_crusher',name:'SmartCrusher',desc:'JSON array compression'},
-    {id:'search',name:'SearchCompressor',desc:'Log/grep output compression'},
+    {id:'smart_crusher',name:'SmartCrusher',desc:'JSON array compression (Rust)'},
+    {id:'search',name:'SearchCompressor',desc:'Log/grep compression'},
     {id:'kompress',name:'Kompress ML',desc:'ML text compression (ModernBERT + ONNX)'},
     {id:'code',name:'CodeCompressor',desc:'AST-aware code compression'},
-    {id:'cache_aligner',name:'CacheAligner',desc:'Prefix stability for KV cache hits'},
+    {id:'cache_aligner',name:'CacheAligner',desc:'Prefix stability for KV cache'},
   ];
-  let html='';
-  stages.forEach(s=>{
+  stEl.innerHTML=stages.map(s=>{
     const fired=active.has(s.id)||s.always;
-    const icon=fired?'&#10003;':'&#8212;';
-    const dotClass=fired?'active':'skipped';
-    const nameClass=fired?'':'skipped';
-    let savings='';
-    if(fired&&tokensSaved>0&&active.has(s.id)){
-      savings=`<div class="pg-stage-savings">${fmtK(tokensSaved)} tokens saved (${Math.round(tokensSaved/tokensBefore*100)}%)</div>`;
-    }
-    html+=`<div class="pg-stage"><div class="pg-stage-dot ${dotClass}">${icon}</div><div class="pg-stage-info"><div class="pg-stage-name ${nameClass}">${s.name}</div><div class="pg-stage-detail">${s.desc}</div>${savings}</div></div>`;
-  });
-  stagesEl.innerHTML=html;
-  let explain=[];
-  if(active.has('smart_crusher'))explain.push('<span style="color:var(--green)">&#9679;</span> <strong>SmartCrusher</strong> — JSON array compressed, keeping important items. Originals stored in CCR.');
-  if(active.has('search'))explain.push('<span style="color:var(--green)">&#9679;</span> <strong>SearchCompressor</strong> — log/grep output compressed, errors preserved.');
-  if(active.has('kompress'))explain.push('<span style="color:var(--green)">&#9679;</span> <strong>Kompress ML</strong> — ModernBERT scored tokens, removed low-importance ones.');
-  if(tokensSaved>0)explain.push(`<span style="color:var(--cyan)">&#9679;</span> <strong>Result:</strong> ${fmtK(tokensBefore)} → ${fmtK(tokensAfter)} tokens (${Math.round(tokensSaved/tokensBefore*100)}% saved)`);
-  if(tokensSaved===0)explain.push('<span style="color:var(--text2)">&#9679;</span> No compression — content too small or protected.');
-  if(lastCCRHashes.length>0)explain.push(`<span style="color:var(--orange)">&#9679;</span> <strong>CCR:</strong> ${lastCCRHashes.length} block(s) stored. Click "Retrieve Original" to demo retrieval.`);
-  explainEl.innerHTML=explain.join('<br>');
+    const savings=fired&&S>0&&active.has(s.id)?`<div class="pg-stage-savings">${fmtK(S)} tokens saved (${Math.round(S/B*100)}%)</div>`:'';
+    return`<div class="pg-stage"><div class="pg-stage-dot ${fired?'active':'skipped'}">${fired?'&#10003;':'&#8212;'}</div><div class="pg-stage-info"><div class="pg-stage-name ${fired?'':'skipped'}">${s.name}</div><div class="pg-stage-detail">${s.desc}</div>${savings}</div></div>`;
+  }).join('');
+  let ex=[];
+  if(active.has('smart_crusher'))ex.push('<span style="color:var(--green)">&#9679;</span> <strong>SmartCrusher</strong> — JSON compressed, originals stored in CCR');
+  if(active.has('search'))ex.push('<span style="color:var(--green)">&#9679;</span> <strong>SearchCompressor</strong> — log output compressed, errors preserved');
+  if(active.has('kompress'))ex.push('<span style="color:var(--green)">&#9679;</span> <strong>Kompress ML</strong> — tokens scored by importance, low-value removed');
+  if(S>0)ex.push(`<span style="color:var(--cyan)">&#9679;</span> <strong>Result:</strong> ${fmtK(B)} → ${fmtK(A)} tokens (${Math.round(S/B*100)}% saved)`);
+  if(S===0)ex.push('<span style="color:var(--text2)">&#9679;</span> No compression — content too small or protected');
+  if(lastCCRHashes.length>0)ex.push(`<span style="color:var(--orange)">&#9679;</span> <strong>CCR:</strong> ${lastCCRHashes.length} block(s) stored — click Retrieve Original to demo`);
+  exEl.innerHTML=ex.join('<br>');
   el.style.display='block';
 }
 
