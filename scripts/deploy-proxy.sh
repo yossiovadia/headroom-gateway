@@ -178,6 +178,8 @@ spec:
         env:
         - name: ANTHROPIC_TARGET_API_URL
           value: "$MAAS_URL"
+        - name: OPENAI_TARGET_API_URL
+          value: "${MAAS_URL%/llm/*}/llm/ext-openai"
         - name: HEADROOM_HOST
           value: "0.0.0.0"
         - name: HEADROOM_PORT
