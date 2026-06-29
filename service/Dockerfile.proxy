@@ -5,8 +5,32 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     ln -sf /usr/bin/python3 /usr/bin/python
 
+# headroom-ai[ml] transitively pulls onnxruntime (CPU) via magika and
+# rapidocr-onnxruntime.  The CPU and GPU packages install to the same
+# site-packages directory — their core shared libs are ABI-incompatible.
+# If both are present, the GPU provider fails at runtime:
+#   "undefined symbol: Provider_GetHost"
+# Fix: install headroom first, remove the CPU onnxruntime, then install
+# onnxruntime-gpu so its core lib is the one that ships.
 RUN pip install --no-cache-dir --break-system-packages \
-    "headroom-ai[proxy,ml,image]" onnxruntime-gpu
+        "headroom-ai[proxy,ml,image]" && \
+    pip uninstall -y --break-system-packages onnxruntime && \
+    pip install --no-cache-dir --break-system-packages onnxruntime-gpu
+
+# Symlink nvidia pip-installed libs so onnxruntime can find them at runtime.
+RUN mkdir -p /opt/app/cuda-links && \
+    for lib in /usr/local/lib/python3.12/dist-packages/nvidia/*/lib/*.so.*; do \
+      base=$(basename "$lib" | sed 's/\.so\..*/\.so/'); \
+      ln -sf "$lib" "/opt/app/cuda-links/$base" 2>/dev/null || true; \
+    done
+ENV LD_LIBRARY_PATH=/opt/app/cuda-links:/usr/local/lib/python3.12/dist-packages/nvidia/cu13/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib
+
+# Build-time gate: verify onnxruntime-gpu is the only onnxruntime installed.
+# Can't load the .so directly — libcuda.so.1 (driver) is only present at runtime.
+RUN pip show --no-color onnxruntime-gpu | grep -q "^Version:" && \
+    ! pip show --no-color onnxruntime 2>/dev/null | grep -q "^Version:" && \
+    test -f /usr/local/lib/python3.12/dist-packages/onnxruntime/capi/libonnxruntime_providers_cuda.so && \
+    echo "VERIFY: onnxruntime-gpu installed, CPU package removed, CUDA provider lib present"
 
 ENV HF_HOME=/opt/huggingface
 ENV HOME=/opt/app
@@ -20,13 +44,6 @@ token = os.environ.get('HF_TOKEN') or None; \
 snapshot_download('chopratejas/kompress-v2-base', token=token); \
 snapshot_download('answerdotai/ModernBERT-base', token=token)" && \
     chmod -R 777 /opt/huggingface /opt/app
-
-RUN mkdir -p /opt/app/cuda-links && \
-    for lib in /usr/local/lib/python3.12/dist-packages/nvidia/*/lib/*.so.*; do \
-      base=$(basename "$lib" | sed 's/\.so\..*/\.so/'); \
-      ln -sf "$lib" "/opt/app/cuda-links/$base" 2>/dev/null || true; \
-    done
-ENV LD_LIBRARY_PATH=/opt/app/cuda-links:/usr/local/lib/python3.12/dist-packages/nvidia/cu13/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib
 
 ENV HEADROOM_HOST=0.0.0.0
 ENV HEADROOM_PORT=8787

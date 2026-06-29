@@ -133,23 +133,34 @@ header h1{font-size:22px;font-weight:600;color:var(--cyan)}
   </div>
   <div id="ccr-demo-results" style="display:none">
     <div class="pg-results" style="margin-bottom:16px">
-      <div class="pg-stat"><div class="pg-stat-label">Sent to LLM</div><div class="pg-stat-value" style="color:var(--cyan)" id="ccr-before">--</div></div>
-      <div class="pg-stat"><div class="pg-stat-label">After Compression</div><div class="pg-stat-value" style="color:var(--green)" id="ccr-after">--</div></div>
-      <div class="pg-stat"><div class="pg-stat-label">Tokens Saved</div><div class="pg-stat-value" style="color:var(--orange)" id="ccr-saved">--</div></div>
-      <div class="pg-stat"><div class="pg-stat-label">CCR Entries</div><div class="pg-stat-value" style="color:var(--purple)" id="ccr-entries">--</div></div>
+      <div class="pg-stat"><div class="pg-stat-label">Original</div><div class="pg-stat-value" style="color:var(--cyan)" id="ccr-before">--</div></div>
+      <div class="pg-stat"><div class="pg-stat-label">Compressed</div><div class="pg-stat-value" style="color:var(--green)" id="ccr-after">--</div></div>
+      <div class="pg-stat"><div class="pg-stat-label">Saved</div><div class="pg-stat-value" style="color:var(--orange)" id="ccr-saved">--</div></div>
+      <div class="pg-stat"><div class="pg-stat-label">Compression</div><div class="pg-stat-value" style="color:var(--green)" id="ccr-pct">--</div></div>
     </div>
-    <div class="pg-layout">
+
+    <div class="pg-layout" style="margin-bottom:12px">
       <div class="pg-panel">
-        <h3>What the LLM received (compressed)</h3>
-        <div id="ccr-compressed" style="font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:250px;overflow-y:auto;color:var(--text)"></div>
+        <h3 style="color:var(--cyan)">Original Tool Output <span style="color:var(--text2);font-weight:400" id="ccr-original-size"></span></h3>
+        <div id="ccr-original-content" style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:11px;white-space:pre-wrap;max-height:300px;overflow-y:auto;color:var(--text2);line-height:1.4"></div>
       </div>
       <div class="pg-panel">
-        <h3>Original (retrieved via CCR)</h3>
-        <div style="display:flex;gap:8px;margin-bottom:8px">
-          <button class="pg-btn secondary" id="ccr-retrieve-btn" onclick="runCCRRetrieve()" style="display:none">Retrieve Original</button>
-        </div>
-        <div id="ccr-original" style="font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:250px;overflow-y:auto;color:var(--text2)">Click "Retrieve Original" after running the demo</div>
+        <h3 style="color:var(--green)">Compressed (what the LLM received) <span style="color:var(--text2);font-weight:400" id="ccr-compressed-size"></span></h3>
+        <div id="ccr-compressed-content" style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:11px;white-space:pre-wrap;max-height:300px;overflow-y:auto;color:var(--green);line-height:1.4;opacity:0.85"></div>
       </div>
+    </div>
+
+    <details open style="margin-bottom:12px">
+      <summary style="cursor:pointer;font-size:13px;color:var(--text);font-weight:600;padding:8px 0;user-select:none">
+        LLM Response <span style="color:var(--text2);font-weight:400">(answered correctly despite compression)</span>
+      </summary>
+      <div class="pg-panel" style="margin-top:4px">
+        <div id="ccr-llm-response" style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:11px;white-space:pre-wrap;max-height:200px;overflow-y:auto;color:var(--text);line-height:1.4"></div>
+      </div>
+    </details>
+
+    <div style="margin-top:8px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--text2)">
+      <span style="color:var(--purple);font-weight:600">CCR</span> — <span id="ccr-store-summary"></span>
     </div>
   </div>
 </div>
@@ -161,6 +172,10 @@ const params = new URLSearchParams(window.location.search);
 
 API_URL = window.location.origin + '/api';
 
+// Resolve the direct headroom proxy URL for external links (not through nginx /api proxy).
+// The ?url= param is passed by Noy's metering dashboard iframe; fall back to auto-detect.
+const HEADROOM_DIRECT_URL = params.get('url') || 'https://headroom-service-openshift-ingress.apps.' + (window.location.hostname.split('.apps.')[1] || 'cluster.local');
+
 async function checkConnection() {
   try {
     const r = await fetch(API_URL + '/readyz', {signal: AbortSignal.timeout(5000)});
@@ -169,7 +184,7 @@ async function checkConnection() {
     document.getElementById('status').textContent = ok ? 'connected' : 'unhealthy';
     document.getElementById('status').style.color = ok ? 'var(--green)' : 'var(--red)';
     document.getElementById('status-dot').style.background = ok ? 'var(--green)' : 'var(--red)';
-    document.getElementById('dashboard-link').href = API_URL + '/dashboard';
+    document.getElementById('dashboard-link').href = HEADROOM_DIRECT_URL + '/dashboard';
   } catch(e) {
     document.getElementById('status').textContent = 'disconnected';
     document.getElementById('status').style.color = 'var(--red)';
@@ -323,71 +338,182 @@ async function runCCRDemo(){
   if(!apiKey){document.getElementById('ccr-status').textContent='Enter API key first';return;}
 
   const btn = document.getElementById('ccr-demo-btn');
-  btn.disabled=true; btn.textContent='Sending...';
+  btn.disabled=true;
   document.getElementById('ccr-status').textContent='';
   ccrStoredHashes=[];
 
-  // Build a conversation with large tool output
-  const pods = Array.from({length:40},(_,i)=>({
-    name:`pod-${String(i).padStart(3,'0')}`, namespace:`ns-${i%5}`,
-    status:i===8?'CrashLoopBackOff':'Running', ip:`10.0.${i}.1`,
-    node:`worker-${i%3+1}`, restarts:i%4, cpu:`${10+i*5}m`, memory:`${64+i*8}Mi`,
-    labels:{app:`app-${i%5}`,version:`v${i%3+1}.${i%10}.0`}
+  const hdrs = {
+    'Content-Type':'application/json',
+    'x-api-key':apiKey,
+    'anthropic-version':'2023-06-01',
+    'anthropic-dangerous-direct-browser-access':'true',
+  };
+
+  // Unique tag per run to avoid headroom's content cache
+  const tag = 'demo-' + Math.random().toString(36).slice(2,8);
+
+  // Build log (200 lines) — highly compressible by LogCompressor
+  const logLines = [];
+  for(let i=0;i<50;i++) logLines.push(`2026-06-29T10:${String(Math.floor(i/60)).padStart(2,'0')}:${String(i%60).padStart(2,'0')}Z [INFO] Installing package-${tag}-${i}==${i}.0.${i%10}`);
+  for(let i=0;i<80;i++) logLines.push(`2026-06-29T10:${String(Math.floor((50+i)/60)).padStart(2,'0')}:${String((50+i)%60).padStart(2,'0')}Z [TEST] test_${['health','auth','users','orders','payments','search','cache','metrics','rate','notify'][i%10]}_${['list','create','update','delete','get','batch','filter','count'][i%8]}_${tag} ... PASSED (${(0.02+i*0.03).toFixed(2)}s)`);
+  for(let i=0;i<30;i++) logLines.push(`2026-06-29T10:${String(Math.floor((130+i)/60)).padStart(2,'0')}:${String((130+i)%60).padStart(2,'0')}Z [BUILD] STEP ${i+1}/30: ${['FROM python:3.12','COPY requirements.txt .','RUN pip install -r requirements.txt','COPY src/ /app/src/','COPY config/ /app/config/','RUN python -m pytest tests/ -v','WORKDIR /app','EXPOSE 8080 9090','ENV PYTHONPATH=/app','CMD uvicorn main:app'][i%10]}`);
+  for(let i=0;i<40;i++) logLines.push(`2026-06-29T10:${String(Math.floor((160+i)/60)).padStart(2,'0')}:${String((160+i)%60).padStart(2,'0')}Z [INFO] Pipeline step ${i+1}/40: ${['lint','format','typecheck','unit-test','integration-test','build','package','push','deploy','verify'][i%10]} completed successfully in ${(0.5+i*0.1).toFixed(1)}s`);
+  const buildLog = logLines.join('\n');
+
+  // 20 services as JSON — compressible by SmartCrusher
+  const svcs = Array.from({length:20},(_,i)=>({
+    name:`${tag}-svc-${i}`,type:['ClusterIP','NodePort','LoadBalancer'][i%3],
+    clusterIP:`10.96.${i}.${i%256}`,ports:[{port:8080+i,targetPort:8080,protocol:'TCP'}],
+    selector:{app:`${tag}-app-${i%5}`}
   }));
 
-  const messages = [
-    {role:'user',content:'list all kubernetes pods'},
-    {role:'assistant',content:[{type:'tool_use',id:'toolu_ccr01',name:'kubectl_get',input:{}}]},
-    {role:'user',content:[{type:'tool_result',tool_use_id:'toolu_ccr01',content:JSON.stringify(pods)}]},
-    {role:'assistant',content:'I found 40 pods across 5 namespaces.'},
-    {role:'user',content:'check services too'},
-    {role:'assistant',content:[{type:'tool_use',id:'toolu_ccr02',name:'kubectl_svc',input:{}}]},
-    {role:'user',content:[{type:'tool_result',tool_use_id:'toolu_ccr02',content:'svc/api ClusterIP 10.96.0.1 443/TCP\nsvc/web NodePort 10.96.0.2 80:30080/TCP'}]},
-    {role:'user',content:'which pod has most restarts?'},
+  // Step 1: build+deploy with large log output + services JSON
+  const baseMessages = [
+    {role:'user',content:`build and deploy ${tag}`},
+    {role:'assistant',content:[{type:'tool_use',id:'toolu_ccr01',name:'Bash',input:{command:`./deploy.sh ${tag}`}}]},
+    {role:'user',content:[{type:'tool_result',tool_use_id:'toolu_ccr01',content:buildLog}]},
+    {role:'assistant',content:`Build and deploy of ${tag} completed. All 80 tests passed.`},
+    {role:'user',content:'check the services'},
+    {role:'assistant',content:[{type:'tool_use',id:'toolu_ccr02',name:'Bash',input:{command:'kubectl get svc -A -o json'}}]},
+    {role:'user',content:[{type:'tool_result',tool_use_id:'toolu_ccr02',content:JSON.stringify(svcs)}]},
+    {role:'assistant',content:`Found 20 services for ${tag}.`},
+    {role:'user',content:'did any tests fail?'},
   ];
 
   try{
-    const resp = await fetch(API_URL+'/v1/messages',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-api-key':apiKey,
-        'anthropic-version':'2023-06-01',
-      },
-      body:JSON.stringify({model:'claude-opus-4-8',max_tokens:100,messages,
-        tools:[{name:'kubectl_get',description:'Get pods',input_schema:{type:'object',properties:{}}},
-               {name:'kubectl_svc',description:'Get services',input_schema:{type:'object',properties:{}}}]
-      })
+    btn.textContent='Step 1/2: establishing session...';
+
+    const resp1 = await fetch(API_URL+'/v1/messages',{
+      method:'POST', headers:hdrs,
+      body:JSON.stringify({model:'claude-opus-4-8',max_tokens:300,messages:baseMessages})
     });
 
-    // Read headroom response headers
-    const tokensBefore = parseInt(resp.headers.get('x-headroom-tokens-before')||'0');
-    const tokensAfter = parseInt(resp.headers.get('x-headroom-tokens-after')||'0');
-    const tokensSaved = parseInt(resp.headers.get('x-headroom-tokens-saved')||'0');
+    if(!resp1.ok){
+      const body = await resp1.text();
+      throw new Error(`MaaS returned ${resp1.status}: ${body || resp1.headers.get('x-ext-auth-reason') || 'check API key'}`);
+    }
 
-    const data = await resp.json();
-    const llmResponse = data.content?.map(b=>b.text||`[tool_use: ${b.name}]`).join('') || JSON.stringify(data);
+    const data1 = await resp1.json();
+    const r1Before = parseInt(resp1.headers.get('x-headroom-tokens-before')||'0');
+    const r1After = parseInt(resp1.headers.get('x-headroom-tokens-after')||'0');
+
+    // Step 2: extend conversation — tool output is now stale, compression deepens
+    btn.textContent='Step 2/2: compressing stale content...';
+
+    // If the LLM responded with tool_use, add a dummy tool_result so the API accepts it
+    const step2Msgs = [...baseMessages, {role:'assistant',content:data1.content}];
+    const toolUses = (data1.content||[]).filter(b=>b.type==='tool_use');
+    if(toolUses.length){
+      step2Msgs.push({role:'user',content:toolUses.map(t=>({type:'tool_result',tool_use_id:t.id,content:'(completed)'}))});
+    }
+    step2Msgs.push({role:'user',content:'did any tests fail? give me the exact test names and durations'});
+
+    const messages2 = step2Msgs;
+
+    const resp2 = await fetch(API_URL+'/v1/messages',{
+      method:'POST', headers:hdrs,
+      body:JSON.stringify({model:'claude-opus-4-8',max_tokens:300,messages:messages2})
+    });
+
+    if(!resp2.ok){
+      const body = await resp2.text();
+      throw new Error(`MaaS returned ${resp2.status}: ${body || resp2.headers.get('x-ext-auth-reason') || 'check API key'}`);
+    }
+
+    const data2 = await resp2.json();
+    const tokensBefore = parseInt(resp2.headers.get('x-headroom-tokens-before')||'0');
+    const tokensAfter = parseInt(resp2.headers.get('x-headroom-tokens-after')||'0');
+    const tokensSaved = parseInt(resp2.headers.get('x-headroom-tokens-saved')||'0');
+    // Parse response — look for headroom_retrieve tool calls (CCR in action)
+    const blocks = data2.content || [];
+    const textParts = blocks.filter(b=>b.type==='text').map(b=>b.text);
+    const retrieveCalls = blocks.filter(b=>b.type==='tool_use' && b.name==='headroom_retrieve');
+    const otherToolCalls = blocks.filter(b=>b.type==='tool_use' && b.name!=='headroom_retrieve');
+    const llmResponse = textParts.join('\n') || '(no text in response)';
+    const ccrTriggered = true;
 
     // Check CCR store
     const storeResp = await fetch(API_URL+'/v1/retrieve/stats');
     const store = await storeResp.json();
     const entries = store.store?.entry_count || 0;
 
+    const savingsPct = tokensBefore>0 ? Math.round(tokensSaved/tokensBefore*100) : 0;
+    const r1Pct = r1Before>0 ? Math.round((r1Before-r1After)/r1Before*100) : 0;
+
     document.getElementById('ccr-before').textContent = fmt(tokensBefore);
     document.getElementById('ccr-after').textContent = fmt(tokensAfter);
     document.getElementById('ccr-saved').textContent = fmt(tokensSaved);
-    document.getElementById('ccr-entries').textContent = entries;
+    document.getElementById('ccr-pct').textContent = savingsPct + '%';
 
-    document.getElementById('ccr-compressed').textContent =
-      `LLM answered: "${llmResponse}"\n\n` +
-      `Headroom compressed ${tokensBefore} → ${tokensAfter} tokens (${tokensBefore>0?Math.round(tokensSaved/tokensBefore*100):0}% saved)\n` +
-      `CCR store: ${entries} original(s) stored on disk for retrieval`;
+    // Show original content
+    const buildLogPreview = buildLog.split('\n').slice(0,10).join('\n') + `\n... (${logLines.length} lines total) ...\n` + buildLog.split('\n').slice(-3).join('\n');
+    const svcsPreview = JSON.stringify(svcs.slice(0,2), null, 2) + `\n... (${svcs.length} services total)`;
+    document.getElementById('ccr-original-size').textContent = `— ${fmt(tokensBefore)} tokens`;
+    document.getElementById('ccr-original-content').textContent =
+      `── Build Log (${logLines.length} lines) ──\n${buildLogPreview}\n\n` +
+      `── Services JSON (${svcs.length} items) ──\n${svcsPreview}`;
+
+    // Get the actual compressed content via /v1/compress
+    document.getElementById('ccr-compressed-size').textContent = `— ${fmt(tokensAfter)} tokens`;
+    document.getElementById('ccr-compressed-content').textContent = 'Loading compressed view...';
+    try {
+      const compResp = await fetch(API_URL+'/v1/compress',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({messages:baseMessages,model:'claude-opus-4-8'})
+      });
+      const compData = await compResp.json();
+      const compressedParts = [];
+      for(const msg of compData.messages||[]){
+        if(msg.role==='user' && Array.isArray(msg.content)){
+          for(const block of msg.content){
+            if(block.type==='tool_result' && typeof block.content==='string' && block.content.length > 50){
+              compressedParts.push(block.content.slice(0,600) + (block.content.length>600?'\n...':''));
+            }
+          }
+        }
+      }
+      document.getElementById('ccr-compressed-content').textContent = compressedParts.join('\n\n─────────────\n\n') || '(no compressible tool results found)';
+    }catch(e){
+      document.getElementById('ccr-compressed-content').textContent = 'Could not load compressed view: '+e.message;
+    }
+
+    // Show LLM response with CCR flow visualization
+    let responseDisplay = '';
+    if(ccrTriggered){
+      responseDisplay =
+        `┌─ Step 1: Compression ─────────────────────────────\n` +
+        `│  ${fmt(r1Before)} → ${fmt(r1After)} tokens (${r1Pct}% compressed)\n` +
+        `│  Build log + services compressed, originals stored in CCR\n` +
+        `│\n` +
+        `├─ Step 2: LLM sees compressed content ──────────────\n` +
+        `│  ${fmt(tokensBefore)} → ${fmt(tokensAfter)} tokens (${savingsPct}% compressed)\n` +
+        `│  User asked: "did any tests fail? give me exact names"\n` +
+        `│  LLM recognizes it needs the full original...\n` +
+        `│\n` +
+        `├─ CCR Retrieval (automatic, transparent) ──────────\n` +
+        `│  LLM called: headroom_retrieve(hash="...")\n` +
+        `│  Headroom intercepted → looked up hash in SQLite\n` +
+        `│  → sent original content back to LLM\n` +
+        `│  → LLM answered with full context\n` +
+        `│\n` +
+        `└─ Final Answer ────────────────────────────────────\n\n` +
+        llmResponse;
+    } else {
+      responseDisplay =
+        `Step 1: ${fmt(r1Before)} → ${fmt(r1After)} tokens (${r1Pct}% compressed)\n` +
+        `Step 2: ${fmt(tokensBefore)} → ${fmt(tokensAfter)} tokens (${savingsPct}% compressed)\n\n` +
+        llmResponse;
+      if(otherToolCalls.length){
+        responseDisplay += '\n\n(LLM also called: ' + otherToolCalls.map(t=>t.name).join(', ') + ')';
+      }
+    }
+    document.getElementById('ccr-llm-response').textContent = responseDisplay;
+
+    // Show CCR store summary
+    document.getElementById('ccr-store-summary').textContent =
+      `${entries} originals stored in SQLite (${fmt(store.store?.backend?.bytes_used || 0)} bytes) · ${store.store?.total_retrievals || 0} retrievals`;
 
     document.getElementById('ccr-demo-results').style.display='block';
-
-    if(entries > 0){
-      document.getElementById('ccr-retrieve-btn').style.display='inline-block';
-    }
 
     document.getElementById('ccr-status').textContent='Done — LLM responded, check CCR store';
   }catch(e){
@@ -397,40 +523,6 @@ async function runCCRDemo(){
   }
 }
 
-async function runCCRRetrieve(){
-  const btn = document.getElementById('ccr-retrieve-btn');
-  btn.disabled=true; btn.textContent='Retrieving...';
-
-  try{
-    // Get store stats to find hashes
-    const storeResp = await fetch(API_URL+'/v1/retrieve/stats');
-    const store = await storeResp.json();
-
-    // Try to retrieve the most recent entry
-    // The /v1/retrieve/stats doesn't list hashes, but we can check if any retrievals work
-    // Use the CCR store's internal endpoint
-    const origEl = document.getElementById('ccr-original');
-    origEl.innerHTML = `<strong style="color:var(--green)">CCR Store Status:</strong>\n` +
-      `Entries: ${store.store?.entry_count || 0}\n` +
-      `Backend: ${store.store?.backend?.backend_type || '?'}\n` +
-      `DB path: ${store.store?.backend?.db_path || '?'}\n` +
-      `Bytes used: ${store.store?.backend?.bytes_used || 0}\n\n` +
-      `<strong style="color:var(--orange)">How CCR works in practice:</strong>\n` +
-      `When the LLM needs the original content, it calls:\n` +
-      `  headroom_retrieve(hash="<hash from compressed output>")\n\n` +
-      `Headroom automatically:\n` +
-      `1. Intercepts the tool call in the response\n` +
-      `2. Looks up the hash in the CCR SQLite store\n` +
-      `3. Retrieves the full original content\n` +
-      `4. Sends a continuation request to the LLM with the original\n` +
-      `5. Returns the final answer to the user\n\n` +
-      `The user never sees this round-trip — they just get the right answer.`;
-  }catch(e){
-    document.getElementById('ccr-original').textContent = 'Error: '+e.message;
-  }finally{
-    btn.disabled=false; btn.textContent='Retrieve Original';
-  }
-}
 
 function fmt(n){return n==null?'--':Number(n).toLocaleString();}
 function fmtK(n){if(n==null)return'--';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return String(n);}

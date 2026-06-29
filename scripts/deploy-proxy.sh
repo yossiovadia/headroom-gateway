@@ -6,6 +6,7 @@
 # Prerequisites:
 #   - oc logged into the target OpenShift cluster
 #   - MaaS gateway deployed and accessible
+#   - At least one GPU node available (nvidia.com/gpu)
 #
 # Usage:
 #   ./scripts/deploy-proxy.sh                                    # deploy to openshift-ingress
@@ -54,9 +55,17 @@ if ! oc get namespace "$NAMESPACE" &>/dev/null; then
 fi
 echo "  namespace: $NAMESPACE"
 
+# Check GPU nodes
+GPU_NODES=$(oc get nodes -o jsonpath='{range .items[*]}{.status.capacity.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null | grep -c '^[1-9]' || echo "0")
+if [ "$GPU_NODES" -eq 0 ]; then
+  echo "FAIL: no GPU nodes found (nvidia.com/gpu). Headroom proxy requires GPU for Kompress ML."
+  echo "      Without GPU, Kompress runs on CPU (~3s per compression) causing request timeouts."
+  exit 1
+fi
+echo "  GPU nodes: $GPU_NODES"
+
 # Check MaaS gateway
 if [ -z "$MAAS_URL" ]; then
-  # Auto-detect from cluster
   CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
   if [ -n "$CLUSTER_DOMAIN" ]; then
     MAAS_URL="https://maas.$CLUSTER_DOMAIN/llm/ext-opus"
@@ -74,7 +83,7 @@ else
   echo "  MaaS: reachable (HTTP $MAAS_STATUS)"
 fi
 
-# Check IPP is deployed (we don't configure it, but it must exist for MaaS to work)
+# Check IPP is deployed
 if oc get deployment payload-processing -n "$NAMESPACE" &>/dev/null; then
   echo "  IPP (payload-processing): found"
 else
@@ -92,6 +101,7 @@ echo "============================================"
 echo "  Headroom Proxy Deployment"
 echo "  Namespace: $NAMESPACE"
 echo "  MaaS URL:  $MAAS_URL"
+echo "  GPU:       required (nvidia.com/gpu: 1)"
 echo "============================================"
 echo ""
 
@@ -149,6 +159,8 @@ metadata:
     app: headroom-proxy
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: headroom-proxy
@@ -189,6 +201,7 @@ spec:
           limits:
             cpu: "8"
             memory: 8Gi
+            nvidia.com/gpu: "1"
         livenessProbe:
           httpGet:
             path: /livez
@@ -212,7 +225,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: headroom-proxy
+  name: headroom-service
 spec:
   ports:
   - port: 8787
@@ -222,30 +235,34 @@ spec:
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: headroom-proxy
+  name: headroom-service
 spec:
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
   to:
     kind: Service
-    name: headroom-proxy
+    name: headroom-service
   port:
     targetPort: 8787
 EOF
+
+# Clean up old headroom-proxy Service+Route if they exist (renamed to headroom-service)
+oc delete service headroom-proxy -n "$NAMESPACE" 2>/dev/null || true
+oc delete route headroom-proxy -n "$NAMESPACE" 2>/dev/null || true
 echo ""
 
-# Step 4: Rollout (only if build happened)
+# Step 4: Rollout
 echo "=== Step 4: Wait for rollout ==="
 if [ "$SOURCE_HASH" != "$LAST_HASH" ] || [ "$FORCE_BUILD" = true ]; then
   oc rollout restart deployment/headroom-proxy -n "$NAMESPACE"
 fi
-oc rollout status deployment/headroom-proxy -n "$NAMESPACE" --timeout=180s
+oc rollout status deployment/headroom-proxy -n "$NAMESPACE" --timeout=300s
 echo ""
 
 # Step 5: Smoke test
 echo "=== Step 5: Smoke test ==="
-PROXY_HOST=$(oc get route headroom-proxy -n "$NAMESPACE" -o jsonpath='{.spec.host}')
+PROXY_HOST=$(oc get route headroom-service -n "$NAMESPACE" -o jsonpath='{.spec.host}')
 
 echo "Health:"
 curl -sk "https://$PROXY_HOST/readyz" | python3 -m json.tool 2>/dev/null || echo "  not ready yet (may need 30s)"
@@ -257,6 +274,30 @@ echo "  HTTP $(curl -sk -o /dev/null -w '%{http_code}' "https://$PROXY_HOST/dash
 echo ""
 echo "Stats:"
 echo "  HTTP $(curl -sk -o /dev/null -w '%{http_code}' "https://$PROXY_HOST/stats")"
+
+# Step 6: Verify GPU
+echo ""
+echo "=== Step 6: Verify GPU ==="
+POD_NAME=$(oc get pods -n "$NAMESPACE" -l app=headroom-proxy -o jsonpath='{.items[0].metadata.name}')
+GPU_CHECK=$(oc exec "$POD_NAME" -n "$NAMESPACE" -- python3 -c "
+import onnxruntime as ort
+providers = ort.get_available_providers()
+has_cuda = 'CUDAExecutionProvider' in providers
+print(f'providers: {providers}')
+print(f'cuda: {has_cuda}')
+" 2>&1)
+echo "$GPU_CHECK"
+
+if echo "$GPU_CHECK" | grep -q "cuda: True"; then
+  echo "  GPU: VERIFIED"
+else
+  echo ""
+  echo "  WARNING: CUDAExecutionProvider not available!"
+  echo "  Kompress ML will run on CPU (~3s per compression)."
+  echo "  This will cause request timeouts under load."
+  echo ""
+  echo "  Debug: oc exec $POD_NAME -n $NAMESPACE -- python3 -c \"import onnxruntime; print(onnxruntime.get_available_providers())\""
+fi
 
 echo ""
 echo "============================================"
