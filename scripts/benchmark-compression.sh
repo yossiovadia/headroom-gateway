@@ -8,7 +8,10 @@
 
 set -euo pipefail
 
-HEADROOM_URL="${HEADROOM_URL:-https://headroom-service-openshift-ingress.apps.ocp.d4fcj.sandbox659.opentlc.com}"
+HEADROOM_URL="${HEADROOM_URL:-}"
+if [ -z "$HEADROOM_URL" ]; then
+  HEADROOM_URL="https://$(oc get route headroom-service -n "${NAMESPACE:-openshift-ingress}" -o jsonpath='{.spec.host}' 2>/dev/null || echo "headroom-service.example.com")"
+fi
 NUM_REQUESTS=10
 
 while [[ $# -gt 0 ]]; do

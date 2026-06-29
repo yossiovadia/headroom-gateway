@@ -9,17 +9,19 @@
 #   - At least one GPU node available (nvidia.com/gpu)
 #
 # Usage:
-#   ./scripts/deploy-proxy.sh                                    # deploy to openshift-ingress
+#   ./scripts/deploy-proxy.sh                                    # auto-detect from cluster
 #   ./scripts/deploy-proxy.sh -n my-namespace                    # specific namespace
-#   ./scripts/deploy-proxy.sh --maas-url https://maas.../llm/ext-opus  # custom MaaS URL
+#   ./scripts/deploy-proxy.sh --maas-url https://maas.../llm/ext-opus  # Anthropic MaaS route
+#   ./scripts/deploy-proxy.sh --maas-openai-url https://maas.../llm/ext-openai  # OpenAI MaaS route
 #   ./scripts/deploy-proxy.sh --hf-token hf_xxx                  # faster model download
 #   ./scripts/deploy-proxy.sh --force-build                      # rebuild even if unchanged
 
 set -euo pipefail
 
-NAMESPACE="openshift-ingress"
+NAMESPACE="${NAMESPACE:-openshift-ingress}"
 HF_TOKEN="${HF_TOKEN:-}"
 MAAS_URL="${MAAS_URL:-}"
+MAAS_OPENAI_URL="${MAAS_OPENAI_URL:-}"
 FORCE_BUILD=false
 
 while [[ $# -gt 0 ]]; do
@@ -27,6 +29,7 @@ while [[ $# -gt 0 ]]; do
     -n) NAMESPACE="$2"; shift 2 ;;
     --hf-token) HF_TOKEN="$2"; shift 2 ;;
     --maas-url) MAAS_URL="$2"; shift 2 ;;
+    --maas-openai-url) MAAS_OPENAI_URL="$2"; shift 2 ;;
     --force-build) FORCE_BUILD=true; shift ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
@@ -64,16 +67,21 @@ if [ "$GPU_NODES" -eq 0 ]; then
 fi
 echo "  GPU nodes: $GPU_NODES"
 
-# Check MaaS gateway
+# Check MaaS gateway URLs
 if [ -z "$MAAS_URL" ]; then
-  CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
-  if [ -n "$CLUSTER_DOMAIN" ]; then
-    MAAS_URL="https://maas.$CLUSTER_DOMAIN/llm/ext-opus"
-    echo "  MaaS URL auto-detected: $MAAS_URL"
-  else
-    echo "FAIL: could not detect MaaS URL. Pass --maas-url explicitly."
-    exit 1
-  fi
+  echo "FAIL: MaaS Anthropic URL not set."
+  echo "      Pass --maas-url or set MAAS_URL env var."
+  echo "      Example: --maas-url https://maas.<cluster-domain>/llm/ext-opus"
+  exit 1
+fi
+echo "  MaaS Anthropic URL: $MAAS_URL"
+
+if [ -z "$MAAS_OPENAI_URL" ]; then
+  echo "  WARN: MaaS OpenAI URL not set — Codex/OpenAI requests will route directly to api.openai.com"
+  echo "        Pass --maas-openai-url to route through MaaS (auth + metering)"
+fi
+if [ -n "$MAAS_OPENAI_URL" ]; then
+  echo "  MaaS OpenAI URL:    $MAAS_OPENAI_URL"
 fi
 
 MAAS_STATUS=$(curl -sk -o /dev/null -w "%{http_code}" "$MAAS_URL/v1/messages" -X POST -H "Content-Type: application/json" -d '{}' 2>/dev/null || echo "000")
@@ -178,8 +186,6 @@ spec:
         env:
         - name: ANTHROPIC_TARGET_API_URL
           value: "$MAAS_URL"
-        - name: OPENAI_TARGET_API_URL
-          value: "${MAAS_URL%/llm/*}/llm/ext-openai"
         - name: HEADROOM_HOST
           value: "0.0.0.0"
         - name: HEADROOM_PORT
@@ -250,6 +256,12 @@ spec:
   port:
     targetPort: 8787
 EOF
+
+# Set OpenAI upstream if provided
+if [ -n "$MAAS_OPENAI_URL" ]; then
+  oc set env deployment/headroom-proxy -n "$NAMESPACE" \
+    OPENAI_TARGET_API_URL="$MAAS_OPENAI_URL" 2>/dev/null
+fi
 
 # Clean up old headroom-proxy Service+Route if they exist (renamed to headroom-service)
 oc delete service headroom-proxy -n "$NAMESPACE" 2>/dev/null || true

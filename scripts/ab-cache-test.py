@@ -12,7 +12,7 @@ Usage:
   # Set your keys
   export ANTHROPIC_API_KEY="sk-ant-..."           # Direct Anthropic key
   export MAAS_API_KEY="sk-oai-..."                 # MaaS API key
-  export MAAS_URL="https://maas.apps.ocp.nrt9w.sandbox311.opentlc.com/llm/ext-opus"
+  export MAAS_URL="https://maas.<cluster-domain>/llm/<anthropic-route>"
 
   # Run (takes ~2-3 minutes)
   python3 scripts/ab-cache-test.py
@@ -273,7 +273,7 @@ def main():
 
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     maas_key = os.environ.get("MAAS_API_KEY", "")
-    maas_url = os.environ.get("MAAS_URL", "https://maas.apps.ocp.nrt9w.sandbox311.opentlc.com/llm/ext-opus")
+    maas_url = os.environ.get("MAAS_URL", "")
 
     results = {}
 
