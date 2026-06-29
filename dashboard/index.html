@@ -62,11 +62,9 @@ header h1{font-size:22px;font-weight:600;color:var(--cyan)}
   <a id="dashboard-link" href="#" target="_blank" class="header-link">Open Dashboard &#8599;</a>
 </header>
 
-<div class="config-bar">
-  <label>Headroom Proxy</label>
-  <input type="text" id="proxy-url" placeholder="https://headroom-proxy-...">
-  <button onclick="applyUrl()">Connect</button>
-  <span id="status" style="color:var(--text2);font-size:12px"></span>
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:20px">
+  <span id="status-dot" style="width:8px;height:8px;border-radius:50%;background:var(--text2);display:inline-block"></span>
+  <span id="status" style="color:var(--text2);font-size:12px">connecting...</span>
 </div>
 
 <div class="pg-controls">
@@ -134,30 +132,19 @@ function detectApiUrl() {
 }
 
 API_URL = detectApiUrl();
-document.getElementById('proxy-url').value = API_URL.replace('/api', '').replace(window.location.origin, '(via nginx proxy)');
-
-function applyUrl() {
-  const val = document.getElementById('proxy-url').value.trim();
-  if (val && !val.startsWith('(')) {
-    API_URL = val.replace(/\/+$/, '');
-  }
-  checkConnection();
-}
-
 async function checkConnection() {
   try {
     const r = await fetch(API_URL + '/readyz', {signal: AbortSignal.timeout(5000)});
     const d = await r.json();
-    document.getElementById('status').textContent = d.status === 'healthy' ? 'connected' : 'unhealthy';
-    document.getElementById('status').style.color = d.status === 'healthy' ? 'var(--green)' : 'var(--red)';
-    // Update dashboard link
-    const dashUrl = API_URL.replace('/api', '') === window.location.origin
-      ? API_URL.replace('/api', '/api/dashboard')
-      : API_URL + '/dashboard';
-    document.getElementById('dashboard-link').href = dashUrl;
+    const ok = d.status === 'healthy';
+    document.getElementById('status').textContent = ok ? 'connected' : 'unhealthy';
+    document.getElementById('status').style.color = ok ? 'var(--green)' : 'var(--red)';
+    document.getElementById('status-dot').style.background = ok ? 'var(--green)' : 'var(--red)';
+    document.getElementById('dashboard-link').href = API_URL + '/dashboard';
   } catch(e) {
     document.getElementById('status').textContent = 'disconnected';
     document.getElementById('status').style.color = 'var(--red)';
+    document.getElementById('status-dot').style.background = 'var(--red)';
   }
 }
 checkConnection();
