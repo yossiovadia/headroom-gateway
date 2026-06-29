@@ -125,10 +125,13 @@ iframe{width:100%;border:none;min-height:calc(100vh - 60px)}
 // Resolve URLs from query params or cluster domain
 const params = new URLSearchParams(window.location.search);
 const clusterDomain = window.location.hostname.split('.apps.')[1] || '';
-let PROXY_URL = params.get('url') || params.get('proxy_url') || ('https://headroom-proxy-openshift-ingress.apps.' + clusterDomain);
+// For API calls: use /api prefix (nginx proxies to headroom-proxy, avoids CORS)
+// For dashboard iframe: use direct proxy URL
+const directProxyUrl = params.get('url') || params.get('proxy_url') || ('https://headroom-proxy-openshift-ingress.apps.' + clusterDomain);
+let PROXY_URL = window.location.origin + '/api';
 
 // Dashboard tab: embed proxy's built-in dashboard
-document.getElementById('dashboard-frame').src = PROXY_URL + '/dashboard';
+document.getElementById('dashboard-frame').src = directProxyUrl + '/dashboard';
 
 function switchTab(tab){
   document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
@@ -196,7 +199,7 @@ async function runPlayground(){
     const resp=await fetch(PROXY_URL+'/v1/compress',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({messages,model:'playground-demo'})
+      body:JSON.stringify({messages,model:'playground-demo'}),
     });
     const ms=Math.round(performance.now()-t0);
     const d=await resp.json();
