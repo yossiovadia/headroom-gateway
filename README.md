@@ -137,43 +137,78 @@ command output see much higher savings (40-70%).
 
 - **Per-user session cache** — avoids re-compressing content seen in earlier requests (same user, same session)
 - **Per-model pricing** — real costs from metering Postgres, not hardcoded estimates
-- **SQLite stats persistence** — survives pod restarts (PVC-backed)
+- **Durable savings tracking** — `proxy_savings.json` on PVC, lifetime stats survive restarts
+- **CCR (Compress-Cache-Retrieve)** — originals stored on PVC, LLM can retrieve via `headroom_retrieve` tool
+- **Image compression** — optional, reduces image token cost by 40-90%
 - **GPU acceleration** — onnxruntime-gpu auto-detects NVIDIA GPUs, falls back to CPU
-- **4 gunicorn workers** — handles 50+ concurrent users
-- **Dashboard** — KPIs, per-user breakdown, compression engine breakdown, hourly trends, playground
-- **Playground tab** — interactive compression demo with pre-defined samples
-- **Prometheus metrics** — `/metrics` endpoint with token counters
-- **Idempotent deploy script** — preflight checks, skip-if-unchanged builds
+- **Built-in dashboard** — `/dashboard` with compression stats, cache hits, agent usage, savings breakdown
+- **Playground + CCR demo** — interactive compression demo with retrieval visualization
+- **Prometheus metrics** — `/metrics` endpoint
 
 ## Deployment
 
-### Prerequisites
+### Prerequisites (not ours — must exist first)
 
-- MaaS gateway deployed (Envoy + Istio + Kuadrant)
-- payload-processing (IPP) deployed with headroom plugin registered
-- metering-service with `model_pricing` table in Postgres
-- ipp-config ConfigMap with headroom plugin entry
+These are deployed by the MaaS platform team before headroom:
 
-### Deploy
+| # | Component | Purpose | How to verify |
+|---|-----------|---------|---------------|
+| 1 | **OpenShift cluster** | Infrastructure | `oc whoami` succeeds |
+| 2 | **Istio / Envoy gateway** | Traffic routing, TLS | Gateway pods running |
+| 3 | **Kuadrant** | API key validation, auth | `oc get authpolicy -A` returns policies |
+| 4 | **MaaS controller + maas-api** | API key management, user identity | `oc get pods -n opendatahub` shows maas-api |
+| 5 | **IPP / payload-processing** | Plugin chain (metering, api-translation, apikey-injection) | `oc get deployment payload-processing -n openshift-ingress` |
+| 6 | **Metering service + Postgres** | Usage tracking, model pricing | `oc get statefulset metering-postgresql -n openshift-ingress` |
+
+**Headroom does NOT require any IPP plugin or ConfigMap changes.** It sits before
+MaaS as a transparent proxy. The IPP pipeline runs after MaaS as usual.
+
+### Deploy headroom proxy
 
 ```bash
-./scripts/deploy-headroom.sh --hf-token hf_xxx
+# 1. Clone this repo
+git clone https://github.com/yossiovadia/headroom-gateway.git
+cd headroom-gateway
+
+# 2. Deploy (one command)
+./scripts/deploy-proxy.sh --hf-token hf_xxx
+
+# Optional: custom MaaS URL
+./scripts/deploy-proxy.sh --maas-url https://maas.company.com/llm/ext-opus
 ```
 
-The script validates prerequisites, builds the image on-cluster, creates a PVC for
-stats persistence, deploys the service + dashboard, and runs a smoke test.
+The script:
+1. Builds the headroom proxy image on-cluster (CUDA base + headroom-ai + models)
+2. Creates a PVC for persistent stats and CCR store
+3. Deploys the proxy with correct env vars
+4. Creates a Service + Route
+5. Runs a smoke test
 
-### IPP Plugin Configuration
+### What gets deployed
 
-Add to ipp-config ConfigMap (after model-provider-resolver, before api-translation):
+```
+headroom-proxy (Deployment)
+  ├── image: headroom proxy with GPU + image support
+  ├── port: 8787
+  ├── env: ANTHROPIC_TARGET_API_URL → MaaS gateway
+  └── volume: PVC at /opt/app/.headroom (savings + CCR store)
 
-```yaml
-- name: headroom
-  type: headroom
-  parameters:
-    headroomURL: "http://headroom-service.openshift-ingress.svc:8787"
-    timeoutSeconds: 10
-    failOpen: true
+headroom-proxy (Service)
+  └── ClusterIP port 8787
+
+headroom-proxy (Route)
+  └── TLS edge → https://headroom-proxy-<namespace>.apps.<cluster>
+```
+
+No dashboard pod needed — the proxy serves `/dashboard` built-in.
+
+### Point users at headroom
+
+```bash
+# Users set ONE env var (instead of pointing at MaaS directly)
+export ANTHROPIC_BASE_URL="https://headroom-proxy-<namespace>.apps.<cluster>"
+export ANTHROPIC_API_KEY="<MaaS-API-key>"       # same key as before
+claude --model claude-opus-4-8                    # works normally
 ```
 
 ### GPU Support
@@ -189,14 +224,16 @@ GPU is auto-detected at runtime. No flags needed.
 
 ### Emergency Controls
 
-**Kill switch** — remove headroom from ipp-config and restart payload-processing (~30 seconds):
+**Rollback** — users change one env var to bypass headroom entirely:
 ```bash
-oc edit configmap ipp-config -n openshift-ingress  # delete headroom block
-oc rollout restart deployment/payload-processing
+export ANTHROPIC_BASE_URL="https://maas.company.com/llm/ext-opus"  # direct to MaaS
 ```
+No deployment changes needed. Compression stops, everything else works.
 
-**Automatic fail-open** — if the headroom service is down or slow (>10s timeout),
-requests pass through uncompressed automatically. No user impact.
+**Scale to zero** — stop headroom without affecting MaaS:
+```bash
+oc scale deployment/headroom-proxy --replicas=0
+```
 
 ## API Endpoints
 
