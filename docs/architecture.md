@@ -7,7 +7,7 @@ tool calls — file reads, build logs, API responses, search results. A typical
 coding session reaches 150K+ tokens, of which **80% is tool output**. Every request
 sends the full conversation history. Token costs scale linearly.
 
-[Headroom](https://github.com/headroomlabs-ai/headroom) (Apache 2.0, 28k+ stars)
+[Headroom](https://github.com/headroomlabs-ai/headroom) (Apache 2.0, 57k+ stars)
 compresses old tool outputs by 50-70% with zero quality loss. It runs as a
 transparent proxy — intercepting LLM API requests, compressing the conversation
 history, and forwarding the optimized payload upstream.
@@ -32,8 +32,11 @@ From production deployment on OpenShift:
 ## Architecture (Option A — Transparent Proxy)
 
 Headroom runs as a transparent proxy **before** MaaS. Users point at headroom
-instead of MaaS directly. Headroom compresses the request, forwards to MaaS,
-and returns the response unmodified.
+instead of MaaS directly. Headroom compresses the request and forwards to MaaS.
+On the response path, headroom passes responses through unmodified **unless** the
+LLM calls `headroom_retrieve` (CCR) — in that case, headroom intercepts the tool
+call, retrieves the original content from the CCR store, sends a continuation
+request to the LLM, and returns the final answer to the client transparently.
 
 ```
 Client (Claude Code / Codex / Cursor)
@@ -90,7 +93,7 @@ Users change one environment variable to route through headroom:
 ```bash
 export ANTHROPIC_BASE_URL=https://headroom-service-<namespace>.apps.<cluster-domain>
 export ANTHROPIC_API_KEY=<MaaS-key>       # same key as before
-export NODE_TLS_REJECT_UNAUTHORIZED=0
+export NODE_TLS_REJECT_UNAUTHORIZED=0  # sandbox only — production uses a trusted cert on the Route
 claude --model claude-opus-4-8
 ```
 
@@ -108,7 +111,7 @@ env_key = "MAAS_API_KEY"
 ```
 ```bash
 export MAAS_API_KEY=<MaaS-key>
-export NODE_TLS_REJECT_UNAUTHORIZED=0
+export NODE_TLS_REJECT_UNAUTHORIZED=0  # sandbox only — production uses a trusted cert
 codex
 ```
 
@@ -176,6 +179,11 @@ Tool output content
 | Stale Read outputs | Compressed | File was edited after reading — content is stale |
 | Superseded Read outputs | Compressed | File was re-read later — content is redundant |
 
+**Tool injection:** When CCR is enabled, headroom adds a `headroom_retrieve` tool
+to the model's tool list. The model can call this tool to retrieve original
+uncompressed content via a hash. This is a behavior change — coding agents that
+pin or validate their tool list may need to account for the additional tool.
+
 ### CCR (Compress-Cache-Retrieve)
 
 When headroom compresses content, it stores the original in a SQLite database on
@@ -184,6 +192,20 @@ the full original (e.g., to answer a question requiring exact details), it calls
 the `headroom_retrieve` tool with the hash. Headroom intercepts this tool call in
 the response, looks up the hash, sends a continuation request with the original
 content, and returns the final answer to the user. The round-trip is transparent.
+
+**Eviction:** CCR entries have a 30-minute TTL and a max of 1000 entries. If the
+LLM calls `headroom_retrieve` on an expired or evicted hash, the retrieval returns
+empty — the model must work with the compressed version. In practice, retrieval
+rate is ~10% of compressed content, and sessions that exceed 30 minutes of
+inactivity on a particular content block rarely need the original.
+
+### Fail-Open Behavior
+
+When compression fails (timeout, error, unsupported content), headroom passes the
+request through uncompressed. The client never sees a compression failure — it just
+doesn't get the savings for that request. In steady state, expect ~1-2% of requests
+to pass through uncompressed. Higher rates (>5%) indicate an issue with the
+compression pipeline or upstream connectivity.
 
 ### GPU Acceleration
 
