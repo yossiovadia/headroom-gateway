@@ -196,8 +196,8 @@ spec:
           value: "token"
         - name: HEADROOM_TELEMETRY
           value: "off"
-        - name: HEADROOM_CCR_BACKEND
-          value: "sqlite"
+        - name: HEADROOM_NO_CCR
+          value: "1"
         - name: HEADROOM_COMPRESSION_STABLE_AFTER_TURN
           value: "1"
         - name: HEADROOM_STALE_READ_COMPRESS_AFTER_TURNS
