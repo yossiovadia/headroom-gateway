@@ -13,7 +13,7 @@ RUN apt-get update && \
 # Fix: install headroom first, remove the CPU onnxruntime, then install
 # onnxruntime-gpu so its core lib is the one that ships.
 RUN pip install --no-cache-dir --break-system-packages \
-        "headroom-ai[proxy,ml,image]" && \
+        "headroom-ai[proxy,ml,image]==0.31.0" && \
     pip uninstall -y --break-system-packages onnxruntime && \
     pip install --no-cache-dir --break-system-packages onnxruntime-gpu
 
