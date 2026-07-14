@@ -243,8 +243,12 @@ async function runPlayground(){
       body:JSON.stringify({messages,model:'playground-demo'})
     });
     const ms=Math.round(performance.now()-t0);
+    if(!resp.ok){
+      document.getElementById('pg-output').value='Compress endpoint not available (headroom v0.31+ removed /v1/compress). Use the CCR Demo below for live compression testing.';
+      return;
+    }
     const d=await resp.json();
-    const toolOut=d.messages.find(m=>m.role==='tool');
+    const toolOut=(d.messages||[]).find(m=>m.role==='tool');
     const outputText=toolOut?toolOut.content:'(no tool output)';
     document.getElementById('pg-output').value=outputText;
     document.getElementById('pg-before').textContent=fmt(d.tokens_before);
@@ -452,14 +456,15 @@ async function runCCRDemo(){
       `── Build Log (${logLines.length} lines) ──\n${buildLogPreview}\n\n` +
       `── Services JSON (${svcs.length} items) ──\n${svcsPreview}`;
 
-    // Get the actual compressed content via /v1/compress
+    // Get the actual compressed content via /v1/compress (if available)
     document.getElementById('ccr-compressed-size').textContent = `— ${fmt(tokensAfter)} tokens`;
-    document.getElementById('ccr-compressed-content').textContent = 'Loading compressed view...';
+    document.getElementById('ccr-compressed-content').textContent = `Compressed from ${fmt(tokensBefore)} → ${fmt(tokensAfter)} tokens (${savingsPct}% saved).\n\nThe compressed content was sent to the LLM — see the response below.`;
     try {
       const compResp = await fetch(API_URL+'/v1/compress',{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({messages:baseMessages,model:'claude-opus-4-8'})
       });
+      if(!compResp.ok) throw new Error('endpoint not available');
       const compData = await compResp.json();
       const compressedParts = [];
       for(const msg of compData.messages||[]){
