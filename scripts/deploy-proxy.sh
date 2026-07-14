@@ -257,6 +257,84 @@ spec:
     targetPort: 8787
 EOF
 
+# Step 3b: Deploy dashboard nginx (reverse proxy to headroom's built-in /dashboard)
+echo "=== Step 3b: Deploy headroom-dashboard ==="
+oc apply -n "$NAMESPACE" -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: headroom-dashboard
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        location / {
+            proxy_pass http://headroom-service.$NAMESPACE.svc:8787/;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_read_timeout 120s;
+            add_header Access-Control-Expose-Headers "x-headroom-tokens-before, x-headroom-tokens-after, x-headroom-tokens-saved, x-headroom-model, x-headroom-transforms" always;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: headroom-dashboard
+  labels:
+    app: headroom-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: headroom-dashboard
+  template:
+    metadata:
+      labels:
+        app: headroom-dashboard
+    spec:
+      containers:
+      - name: nginx
+        image: nginxinc/nginx-unprivileged:alpine
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: nginx-conf
+          mountPath: /etc/nginx/conf.d
+      volumes:
+      - name: nginx-conf
+        configMap:
+          name: headroom-dashboard
+          items:
+          - key: default.conf
+            path: default.conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: headroom-dashboard
+spec:
+  ports:
+  - port: 8080
+  selector:
+    app: headroom-dashboard
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: headroom-dashboard
+spec:
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: headroom-dashboard
+  port:
+    targetPort: 8080
+EOF
+echo ""
+
 # Set OpenAI upstream if provided
 if [ -n "$MAAS_OPENAI_URL" ]; then
   oc set env deployment/headroom-proxy -n "$NAMESPACE" \
